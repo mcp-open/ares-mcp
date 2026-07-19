@@ -8,10 +8,8 @@ version = "0.2.1"
 description = "Referenčný no-secret MCP connector nad ARES (R1-WP06)."
 requires-python = ">=3.12"
 dependencies = [
-  "openmcp-sdk",
-  "fastmcp==2.11.3",
-  "httpx==0.28.1",
-  "pydantic==2.13.4",
+  "openmcp-sdk>=0.2,<0.3",
+  "httpx>=0.28,<0.29",
 ]
 
 [project.scripts]

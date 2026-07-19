@@ -20,6 +20,7 @@ from mcp.types import ToolAnnotations
 from pydantic import ValidationError
 
 from openmcp_sdk.envelope import ConnectorError, ErrorCode, Provenance, now_utc_iso
+from openmcp_sdk import run_connector
 
 from mcp_ares.schemas import (
     AdresaItem,
@@ -823,10 +824,9 @@ def ares_adresa_standardizovat(text: str, pocet: int = 5) -> AdresaSeznamResult:
 
 
 def main() -> None:
-    # fastmcp 2.x: transport "http" == Streamable HTTP. host/port/path/
-    # stateless_http sa v 2.x odovzdávajú do run() (nie do konštruktora) —
-    # explicitne uvedené kvôli auditovateľnosti (gateway proxuje na :8000/mcp).
-    mcp.run(transport="http", host="0.0.0.0", port=8000, path="/mcp", stateless_http=True)
+    # SDK vyberá local-stdio, hosted alebo self-hosted podľa OPENMCP_MODE.
+    # ARES je no-secret, preto hosted/self-hosted nepotrebujú Vault.
+    run_connector("connector.yaml", mcp)
 
 
 if __name__ == "__main__":
