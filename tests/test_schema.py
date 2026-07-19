@@ -419,3 +419,193 @@ def test_adresa_happy_path_posle_povinny_typ(monkeypatch: pytest.MonkeyPatch) ->
     assert res.data.pocet_celkem == 1
     assert res.data.adresy[0].nazev_obce == "Praha"
     assert res.data.adresy[0].psc == 15800
+
+
+# --- ares_subjekt_lookup: registrace + cz_nace (0.2.0) ---------------------
+
+def test_lookup_odvodi_registrace_a_cz_nace(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`registrace` nese jen zdroje se stavem AKTIVNI (lowercase, seřazené);
+    `cz_nace` se mapuje z `czNace`."""
+    payload = {
+        "ico": VALID_ICO, "obchodniJmeno": "Asseco Central Europe, a.s.",
+        "pravniForma": "121", "sidlo": {"nazevObce": "Praha"},
+        "czNace": ["62010", "620"],
+        "seznamRegistraci": {
+            "stavZdrojeVr": "AKTIVNI", "stavZdrojeRes": "AKTIVNI",
+            "stavZdrojeDph": "AKTIVNI", "stavZdrojeRzp": "NEEXISTUJICI",
+            "stavZdrojeCeu": "NEEXISTUJICI",
+        },
+    }
+    monkeypatch.setattr(
+        server.httpx, "get",
+        lambda url, timeout: httpx.Response(200, request=httpx.Request("GET", url), json=payload),
+    )
+    res = server.lookup_subjekt(VALID_ICO)
+    assert res.data.registrace == ["dph", "res", "vr"]
+    assert res.data.cz_nace == ["62010", "620"]
+
+
+def test_lookup_bez_seznamu_registraci_je_registrace_prazdna(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Chybějící/ne-dict `seznamRegistraci` → prázdný seznam, ne chyba."""
+    payload = {"ico": VALID_ICO, "obchodniJmeno": "X", "sidlo": {}}
+    monkeypatch.setattr(
+        server.httpx, "get",
+        lambda url, timeout: httpx.Response(200, request=httpx.Request("GET", url), json=payload),
+    )
+    assert server.lookup_subjekt(VALID_ICO).data.registrace == []
+
+
+# --- ares_subjekt_nrpzs (zdravotnická zařízení) ----------------------------
+
+def test_nrpzs_invalid_ico_neni_volan_upstream(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        server.httpx, "get",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("nemal sa volať")),
+    )
+    with pytest.raises(server.ConnectorError) as exc:
+        server.lookup_nrpzs("123")
+    assert exc.value.code is ErrorCode.INVALID_INPUT
+
+
+_NRPZS_ZAZNAMY = [
+    {
+        "ico": VALID_ICO, "obchodniJmeno": "Fakultní nemocnice Motol",
+        "pravniForma": "331", "druhZarizeni": "101", "primarniZaznam": True,
+        "sidlo": {"textovaAdresa": "V úvalu 84/1, 15000 Praha 5"},
+        "kontakty": {"telefon": "+420224431111", "email": "reditelstvi@fnmotol.cz",
+                     "www": "http://www.fnmotol.cz"},
+        # PII — nesmí projít do výstupu
+        "angazovaneOsoby": [{"jmeno": "JAN", "prijmeni": "ŘEDITEL", "datumNarozeni": "1970-01-01"}],
+    },
+    {
+        "ico": VALID_ICO, "obchodniJmeno": "FN Motol — pracoviště 2",
+        "druhZarizeni": "102", "sidlo": {"textovaAdresa": "Praha 5"},
+    },
+]
+
+
+def test_nrpzs_reduce_nese_kontakty_a_neuniknou_pii() -> None:
+    """Zařízení nesou institucionální kontakty; angažované osoby (jméno,
+    datum narození) NEuniknou do serializovaného výstupu."""
+    data = server._reduce_nrpzs(_NRPZS_ZAZNAMY)
+    assert data.ico == VALID_ICO
+    assert len(data.zarizeni) == 2
+    assert data.zarizeni[0].telefon == "+420224431111"
+    assert data.zarizeni[0].primarni is True
+    assert data.zarizeni[1].druh_zarizeni == "102"
+    blob = data.model_dump_json()
+    assert "ŘEDITEL" not in blob and "1970" not in blob
+
+
+def test_nrpzs_prazdne_zaznamy_je_invalid_input(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        server.httpx, "get",
+        lambda url, timeout: httpx.Response(
+            200, request=httpx.Request("GET", url), json={"icoId": VALID_ICO, "zaznamy": []}
+        ),
+    )
+    with pytest.raises(server.ConnectorError) as exc:
+        server.lookup_nrpzs(VALID_ICO)
+    assert exc.value.code is ErrorCode.INVALID_INPUT
+
+
+# --- ares_ciselnik (překlad kódů) ------------------------------------------
+
+def test_ciselnik_prazdny_kod_neni_volan_upstream(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        server.httpx, "post",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("nemal sa volať")),
+    )
+    with pytest.raises(server.ConnectorError) as exc:
+        server.lookup_ciselnik("  ")
+    assert exc.value.code is ErrorCode.INVALID_INPUT
+
+
+_CISELNIKY_PAYLOAD = {
+    "pocetCelkem": 2,
+    "ciselniky": [
+        {
+            "kodCiselniku": "PravniForma", "nazevCiselniku": "Pravní forma",
+            "zdrojCiselniku": "res",
+            "polozkyCiselniku": [
+                {"kod": "112", "nazev": [{"kodJazyka": "en", "nazev": "Limited company"},
+                                          {"kodJazyka": "cs", "nazev": "Společnost s ručením omezeným"}]},
+                {"kod": "121", "nazev": [{"kodJazyka": "cs", "nazev": "Akciová společnost"}]},
+                {"kod": "999", "nazev": []},
+            ],
+        },
+        {"kodCiselniku": "PravniForma", "zdrojCiselniku": "com", "polozkyCiselniku": []},
+    ],
+}
+
+
+def test_ciselnik_vybere_cesky_nazev_a_warning_o_zdrojich(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Preferuje se český název (ne první jazyková mutace); více zdrojů →
+    warning s výčtem zdrojů."""
+    monkeypatch.setattr(
+        server.httpx, "post",
+        lambda url, json, timeout: httpx.Response(
+            200, request=httpx.Request("POST", url), json=_CISELNIKY_PAYLOAD
+        ),
+    )
+    res = server.lookup_ciselnik("PravniForma")
+    assert res.data.zdroj_ciselniku == "res"
+    assert res.data.polozky[0].nazev == "Společnost s ručením omezeným"
+    assert res.warnings and "více zdrojích" in res.warnings[0]
+
+
+def test_ciselnik_filter_kod_vrati_jedinou_polozku(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        server.httpx, "post",
+        lambda url, json, timeout: httpx.Response(
+            200, request=httpx.Request("POST", url), json=_CISELNIKY_PAYLOAD
+        ),
+    )
+    res = server.lookup_ciselnik("PravniForma", kod="121")
+    assert [p.kod for p in res.data.polozky] == ["121"]
+    assert res.data.polozky[0].nazev == "Akciová společnost"
+
+
+def test_ciselnik_filter_hledat_substring(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        server.httpx, "post",
+        lambda url, json, timeout: httpx.Response(
+            200, request=httpx.Request("POST", url), json=_CISELNIKY_PAYLOAD
+        ),
+    )
+    res = server.lookup_ciselnik("PravniForma", hledat="akciová")
+    assert [p.kod for p in res.data.polozky] == ["121"]
+
+
+def test_ciselnik_orezanie_na_strop_s_warningom(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Více položek než MAX_CISELNIK_POLOZEK → oříznutí + warning."""
+    velky = {
+        "pocetCelkem": 1,
+        "ciselniky": [{
+            "kodCiselniku": "PravniForma", "zdrojCiselniku": "res",
+            "polozkyCiselniku": [
+                {"kod": str(i), "nazev": [{"kodJazyka": "cs", "nazev": f"Forma {i}"}]}
+                for i in range(server.MAX_CISELNIK_POLOZEK + 10)
+            ],
+        }],
+    }
+    monkeypatch.setattr(
+        server.httpx, "post",
+        lambda url, json, timeout: httpx.Response(200, request=httpx.Request("POST", url), json=velky),
+    )
+    res = server.lookup_ciselnik("PravniForma")
+    assert len(res.data.polozky) == server.MAX_CISELNIK_POLOZEK
+    assert res.data.pocet_celkem == server.MAX_CISELNIK_POLOZEK + 10
+    assert any("vráceno prvních" in w for w in res.warnings)
+
+
+def test_ciselnik_nenalezen_je_invalid_input(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        server.httpx, "post",
+        lambda url, json, timeout: httpx.Response(
+            200, request=httpx.Request("POST", url), json={"pocetCelkem": 0, "ciselniky": []}
+        ),
+    )
+    with pytest.raises(server.ConnectorError) as exc:
+        server.lookup_ciselnik("NeexistujiciCiselnik")
+    assert exc.value.code is ErrorCode.INVALID_INPUT

@@ -1,0 +1,37 @@
+slug: ares
+name: ARES
+version: 0.2.0
+category: registry
+summary: >
+  Vyhledávání v českém ARES — ověření firmy podle IČO (jméno, sídlo, právní
+  forma, DIČ, NACE), fulltext podle obchodního jména, statutární orgán
+  z veřejného rejstříku, živnosti a provozovny, statistické údaje RES,
+  zdravotnická zařízení NRPZS, standardizace adres podle RÚIAN a překlad
+  číselníkových kódů. Veřejné API bez přihlášení — žádné credentials.
+sdk_min_version: 0.1.0
+
+credentials: []
+user_config: []
+operator_config: []
+
+capabilities:
+  default_read_only: true
+
+# display (manifest.display) — kurátorovaný verejný manifest pro web detail
+# (stejný vzor jako raynet-mcp/platform/connector.yaml).
+display:
+  capabilities:
+    - "Ověřit firmu podle IČO — obchodní jméno, sídlo, právní forma, DIČ, NACE"
+    - "Najít subjekt podle jména; číst veřejný a živnostenský rejstřík"
+    - "Standardizovat adresu podle RÚIAN a překládat číselníkové kódy na názvy"
+  permissions:
+    - "Pouze čtení z veřejného ARES REST API (ares.gov.cz) — konektor nikam nezapisuje"
+    - "Bez přihlášení a bez tajemství (no-secret konektor)"
+  data_handling: "Jména statutárů z veřejného rejstříku jsou veřejný údaj a nástroj ares_subjekt_vr je vrací s výslovným upozorněním; datum narození a bydliště se do LLM nikdy nepřenášejí. Ostatní nástroje osobní údaje nevracejí."
+  example_query: "Ověř mi firmu s IČO 27074358 a řekni, kdo ji zastupuje."
+
+egress:
+  host: ares.gov.cz
+  port: 443
+  path_prefix: /ekonomicke-subjekty-v-be/rest
+  methods: [GET, POST]

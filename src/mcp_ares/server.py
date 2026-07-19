@@ -25,10 +25,15 @@ from mcp_ares.schemas import (
     AdresaItem,
     AdresaSeznamData,
     AdresaSeznamResult,
+    CiselnikData,
+    CiselnikPolozka,
+    CiselnikResult,
     ProvozovnaItem,
     Sidlo,
     StatutarniClen,
     SubjektData,
+    SubjektNrpzsData,
+    SubjektNrpzsResult,
     SubjektResData,
     SubjektResResult,
     SubjektResult,
@@ -39,6 +44,7 @@ from mcp_ares.schemas import (
     SubjektSummary,
     SubjektVrData,
     SubjektVrResult,
+    ZarizeniNrpzs,
     ZivnostItem,
 )
 
@@ -50,12 +56,20 @@ ARES_BASE_URL = f"{_ARES_REST}/ekonomicke-subjekty"
 ARES_VR_BASE_URL = f"{_ARES_REST}/ekonomicke-subjekty-vr"
 ARES_RZP_BASE_URL = f"{_ARES_REST}/ekonomicke-subjekty-rzp"
 ARES_RES_BASE_URL = f"{_ARES_REST}/ekonomicke-subjekty-res"
+ARES_NRPZS_BASE_URL = f"{_ARES_REST}/ekonomicke-subjekty-nrpzs"
 ARES_ADRESY_URL = f"{_ARES_REST}/standardizovane-adresy/vyhledat"
+ARES_CISELNIKY_URL = f"{_ARES_REST}/ciselniky-nazevniky/vyhledat"
 
 # `typStandardizaceAdresy` je povinný atribut filtra štandardizácie; ARES dovolí
 # len UPLNA_STANDARDIZACE | VYHOVUJICI_ADRESY — berieme úplnú štandardizáciu.
 ADRESA_TYP_STANDARDIZACE = "UPLNA_STANDARDIZACE"
 MAX_ADRES = 20
+
+# Stropy pre číselníky a NRPZS zariadenia — rovnaká motivácia ako MAX_POCET:
+# ochrana LLM kontextu (PravniForma má ~300 položiek, nemocničná sieť môže mať
+# desiatky pracovísk; warning v odpovedi povie o orezaní).
+MAX_CISELNIK_POLOZEK = 50
+MAX_ZARIZENI = 50
 
 # Vlastný strop veľkosti stránky vyhľadávania — chráni LLM kontext pred
 # zahltením (ARES dovolí viac, ale desiatky subjektov v jednej odpovedi nemajú
@@ -178,12 +192,27 @@ def lookup_subjekt(ico: str) -> SubjektResult:
     payload = _json_dict(resp)
     try:
         data = SubjektData(**payload)
+        data.registrace = _aktivni_registrace(payload.get("seznamRegistraci"))
     except (ValueError, ValidationError, TypeError) as e:
         raise ConnectorError(
             ErrorCode.INTERNAL, f"ARES odpověď neodpovídá očekávanému schématu: {e}"
         ) from e
 
     return SubjektResult(data=data, provenance=_provenance(resp), warnings=[])
+
+
+def _aktivni_registrace(seznam: object) -> list[str]:
+    """Zo `seznamRegistraci` (kľúče `stavZdrojeXxx`) vráti zoznam registrov
+    s hodnotou AKTIVNI ako lowercase skratky (`vr`, `res`, `rzp`, `dph`, …) —
+    LLM z nich vidí, ktorý follow-up nástroj má zmysel volať."""
+    if not isinstance(seznam, dict):
+        return []
+    prefix = "stavZdroje"
+    return sorted(
+        k[len(prefix):].lower()
+        for k, v in seznam.items()
+        if k.startswith(prefix) and v == "AKTIVNI"
+    )
 
 
 def search_subjekt(
@@ -451,6 +480,172 @@ def lookup_res(ico: str) -> SubjektResResult:
     return SubjektResResult(data=data, provenance=_provenance(resp), warnings=[])
 
 
+def lookup_nrpzs(ico: str) -> SubjektNrpzsResult:
+    """Business logika `ares_subjekt_nrpzs` — zdravotnícke zariadenia subjektu
+    z Národného registra poskytovateľov zdravotných služieb. Angažované osoby
+    sa nenesú (PII), kontakty sú inštitucionálne."""
+    if not ICO_RE.fullmatch(ico) or not ico_checksum(ico):
+        raise ConnectorError(
+            ErrorCode.INVALID_INPUT, "IČO musí mít 8 číslic a platný kontrolní součet"
+        )
+
+    resp = _call(lambda: _get(f"{ARES_NRPZS_BASE_URL}/{ico}"))
+    _raise_for_status(
+        resp,
+        not_found_msg=(
+            f"IČO {ico} není v NRPZS (subjekt není registrovaným "
+            "poskytovatelem zdravotních služeb)"
+        ),
+    )
+
+    payload = _json_dict(resp)
+    try:
+        zaznamy = payload.get("zaznamy") or []
+        if not zaznamy:
+            raise ConnectorError(
+                ErrorCode.INVALID_INPUT, f"IČO {ico} nemá záznam v NRPZS"
+            )
+        data = _reduce_nrpzs(zaznamy)
+    except ConnectorError:
+        raise
+    except (ValueError, ValidationError, TypeError, KeyError) as e:
+        raise ConnectorError(
+            ErrorCode.INTERNAL, f"ARES odpověď neodpovídá očekávanému schématu: {e}"
+        ) from e
+
+    warnings: list[str] = []
+    if len(zaznamy) > MAX_ZARIZENI:
+        warnings.append(
+            f"Subjekt má {len(zaznamy)} zařízení/pracovišť, vráceno prvních {MAX_ZARIZENI}."
+        )
+    return SubjektNrpzsResult(data=data, provenance=_provenance(resp), warnings=warnings)
+
+
+def _reduce_nrpzs(zaznamy: list) -> SubjektNrpzsData:
+    """Zredukuje NRPZS záznamy (jeden na zariadenie/pracovisko) na zoznam
+    zariadení s inštitucionálnymi kontaktmi. `angazovaneOsoby` sa **zámerne
+    zahadzujú** (PII — mená osôb podieľajúcich sa na riadení)."""
+    zarizeni: list[ZarizeniNrpzs] = []
+    for z in zaznamy[:MAX_ZARIZENI]:
+        kontakty = z.get("kontakty") or {}
+        zarizeni.append(
+            ZarizeniNrpzs(
+                nazev=z.get("obchodniJmeno") or "",
+                druh_zarizeni=str(z.get("druhZarizeni") or ""),
+                adresa=(z.get("sidlo") or {}).get("textovaAdresa") or "",
+                telefon=kontakty.get("telefon") or "",
+                email=kontakty.get("email") or "",
+                www=kontakty.get("www") or "",
+                primarni=bool(z.get("primarniZaznam")),
+            )
+        )
+
+    prvni = zaznamy[0]
+    return SubjektNrpzsData(
+        ico=prvni.get("ico") or "",
+        obchodni_jmeno=prvni.get("obchodniJmeno") or "",
+        pravni_forma=str(prvni.get("pravniForma") or ""),
+        zarizeni=zarizeni,
+    )
+
+
+def lookup_ciselnik(
+    kod_ciselniku: str,
+    zdroj: str | None = None,
+    hledat: str | None = None,
+    kod: str | None = None,
+) -> CiselnikResult:
+    """Business logika `ares_ciselnik` — preklad kódov na názvy. Stránkovanie
+    ARES endpointu je po číselníkoch (nie položkách), preto sa položky filtrujú
+    a orezávajú až tu (`kod` presná zhoda, `hledat` substring bez diakritiky
+    nerozlišuje veľkosť, strop MAX_CISELNIK_POLOZEK)."""
+    k = (kod_ciselniku or "").strip()
+    if not k:
+        raise ConnectorError(
+            ErrorCode.INVALID_INPUT, "kod_ciselniku je povinný (např. PravniForma)"
+        )
+
+    filtr: dict = {"kodCiselniku": k, "start": 0, "pocet": 10}
+    z = (zdroj or "").strip()
+    if z:
+        filtr["zdrojCiselniku"] = z
+
+    resp = _call(lambda: _post(ARES_CISELNIKY_URL, filtr))
+    _raise_for_status(resp, not_found_msg=f"číselník {k} nebyl nalezen")
+
+    payload = _json_dict(resp)
+    try:
+        ciselniky = payload.get("ciselniky") or []
+        if not ciselniky:
+            raise ConnectorError(ErrorCode.INVALID_INPUT, f"číselník {k} nebyl nalezen")
+        c = ciselniky[0]
+
+        warnings: list[str] = []
+        if len(ciselniky) > 1:
+            zdroje = ", ".join(str(x.get("zdrojCiselniku") or "?") for x in ciselniky)
+            warnings.append(
+                f"Číselník existuje ve více zdrojích ({zdroje}); vrácen "
+                f"'{c.get('zdrojCiselniku')}' — upřesněte parametr 'zdroj'."
+            )
+
+        hl = (hledat or "").strip().lower()
+        kd = (kod or "").strip()
+        polozky: list[CiselnikPolozka] = []
+        for p in c.get("polozkyCiselniku") or []:
+            pk = str(p.get("kod") or "")
+            nazev = _nazev_cs(p.get("nazev"))
+            if kd and pk != kd:
+                continue
+            if hl and hl not in nazev.lower():
+                continue
+            polozky.append(CiselnikPolozka(kod=pk, nazev=nazev))
+    except ConnectorError:
+        raise
+    except (ValueError, ValidationError, TypeError, KeyError) as e:
+        raise ConnectorError(
+            ErrorCode.INTERNAL, f"ARES odpověď neodpovídá očekávanému schématu: {e}"
+        ) from e
+
+    celkem = len(polozky)
+    if celkem == 0:
+        warnings.append("Žádná položka číselníku neodpovídá zadanému filtru.")
+    elif celkem > MAX_CISELNIK_POLOZEK:
+        polozky = polozky[:MAX_CISELNIK_POLOZEK]
+        warnings.append(
+            f"Číselník má {celkem} položek po filtru, vráceno prvních "
+            f"{MAX_CISELNIK_POLOZEK} (upřesněte přes 'hledat' nebo 'kod')."
+        )
+
+    return CiselnikResult(
+        data=CiselnikData(
+            kod_ciselniku=k,
+            nazev_ciselniku=c.get("nazevCiselniku") or "",
+            zdroj_ciselniku=str(c.get("zdrojCiselniku") or ""),
+            pocet_celkem=celkem,
+            polozky=polozky,
+        ),
+        provenance=_provenance(resp),
+        warnings=warnings,
+    )
+
+
+def _nazev_cs(nazvy: object) -> str:
+    """Z viacjazyčného poľa `nazev` ([{kodJazyka, nazev}]) vyberie český názov,
+    inak prvý dostupný. Skalár/prázdno → prázdny string."""
+    if not isinstance(nazvy, list):
+        return str(nazvy) if nazvy else ""
+    prvni = ""
+    for n in nazvy:
+        if not isinstance(n, dict):
+            continue
+        hodnota = n.get("nazev") or ""
+        if not prvni:
+            prvni = hodnota
+        if n.get("kodJazyka") == "cs" and hodnota:
+            return hodnota
+    return prvni
+
+
 def standardizovat_adresu(text: str, pocet: int = 5) -> AdresaSeznamResult:
     """Business logika `ares_adresa_standardizovat` — RÚIAN standardizace/
     našeptávač adresy podle volného textu."""
@@ -506,18 +701,26 @@ mcp: FastMCP = FastMCP(
     "ares",
     instructions=(
         "Vyhledávání ekonomických subjektů v českém ARES. Veřejné API, bez přihlášení. "
-        "Nástroje: ares_subjekt_lookup (detail podle IČO), ares_subjekt_vyhledat "
+        "Nástroje: ares_subjekt_lookup (detail podle IČO; pole 'registrace' říká, ve "
+        "kterých registrech má subjekt aktivní záznam), ares_subjekt_vyhledat "
         "(hledání podle obchodního jména), ares_subjekt_vr (statutární orgán a předmět "
         "podnikání z veřejného rejstříku — obsahuje osobní údaje), ares_subjekt_rzp "
         "(živnosti a provozovny), ares_subjekt_res (NACE a kategorie počtu zaměstnanců), "
-        "ares_adresa_standardizovat (standardizace/našeptávač adresy podle RÚIAN)."
+        "ares_subjekt_nrpzs (zdravotnická zařízení a jejich kontakty), "
+        "ares_adresa_standardizovat (standardizace/našeptávač adresy podle RÚIAN), "
+        "ares_ciselnik (překlad kódů z odpovědí — např. PravniForma 112 → název)."
     ),
 )
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 def ares_subjekt_lookup(ico: str) -> SubjektResult:
-    """Vyhledá ekonomický subjekt v ARES podle IČO (8 číslic)."""
+    """Vyhledá ekonomický subjekt v ARES podle IČO (8 číslic).
+
+    Vrací základní detail (jméno, sídlo, právní forma, DIČ, NACE) a pole
+    `registrace` — seznam registrů s aktivním záznamem (vr → ares_subjekt_vr,
+    rzp → ares_subjekt_rzp, res → ares_subjekt_res, nrpzs → ares_subjekt_nrpzs).
+    """
     return lookup_subjekt(ico)
 
 
@@ -562,6 +765,35 @@ def ares_subjekt_res(ico: str) -> SubjektResResult:
     Doplňuje k základnímu detailu klasifikaci NACE a kategorii počtu zaměstnanců.
     """
     return lookup_res(ico)
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+def ares_subjekt_nrpzs(ico: str) -> SubjektNrpzsResult:
+    """Zdravotnická zařízení subjektu z Národního registru poskytovatelů
+    zdravotních služeb (NRPZS) podle IČO.
+
+    Vrací seznam zařízení/pracovišť: název, druh (kód — přeložit přes
+    ares_ciselnik, kod_ciselniku='DruhZarizeni', zdroj='nrpzs'), adresu a
+    institucionální kontakty (telefon, e-mail, web). Neobsahuje osobní údaje.
+    """
+    return lookup_nrpzs(ico)
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+def ares_ciselnik(
+    kod_ciselniku: str,
+    zdroj: str | None = None,
+    hledat: str | None = None,
+    kod: str | None = None,
+) -> CiselnikResult:
+    """Přeloží číselníkové kódy z ARES odpovědí na názvy (např. PravniForma
+    kód 112 → „Společnost s ručením omezeným").
+
+    `kod_ciselniku` je např. PravniForma, DruhZarizeni, TypSubjektu;
+    `zdroj` upřesní oblast (res, com, vr, rzp, nrpzs, …), `kod` vrátí jedinou
+    položku, `hledat` filtruje názvy podřetězcem. Bez filtru max 50 položek.
+    """
+    return lookup_ciselnik(kod_ciselniku, zdroj=zdroj, hledat=hledat, kod=kod)
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))

@@ -39,6 +39,11 @@ class SubjektData(BaseModel):
     datum_vzniku: str | None = Field(alias="datumVzniku", default=None)
     dic: str | None = Field(default=None)
     sidlo: Sidlo
+    cz_nace: list[str] = Field(alias="czNace", default_factory=list)
+    # Zoznam registrov s AKTIVNÍ záznamom (odvodené zo `seznamRegistraci`,
+    # plní `server.lookup_subjekt`) — navádza LLM, ktorý follow-up nástroj má
+    # zmysel volať (vr → ares_subjekt_vr, rzp → ares_subjekt_rzp, …).
+    registrace: list[str] = Field(default_factory=list)
 
 
 class SubjektResult(EnvelopeBase):
@@ -192,3 +197,61 @@ class AdresaSeznamResult(EnvelopeBase):
     """Výstup `ares_adresa_standardizovat`."""
 
     data: AdresaSeznamData
+
+
+class CiselnikPolozka(BaseModel):
+    """Jedna položka číselníku — kód + český název. Historické (už neplatné)
+    položky sa nesú tiež: staršie subjekty ich kódy stále používajú."""
+
+    kod: str
+    nazev: str = ""
+
+
+class CiselnikData(BaseModel):
+    """Položky jedného ARES číselníka (napr. `PravniForma`) — preklad kódov
+    z odpovedí ostatných nástrojov na ľudské názvy. `pocet_celkem` je počet
+    položiek po aplikovaní filtra (pred orezaním na strop)."""
+
+    kod_ciselniku: str
+    nazev_ciselniku: str = ""
+    zdroj_ciselniku: str = ""
+    pocet_celkem: int
+    polozky: list[CiselnikPolozka] = Field(default_factory=list)
+
+
+class CiselnikResult(EnvelopeBase):
+    """Výstup `ares_ciselnik`."""
+
+    data: CiselnikData
+
+
+class ZarizeniNrpzs(BaseModel):
+    """Jedno zdravotnícke zariadenie/pracovisko z NRPZS. `druh_zarizeni` je
+    kód — preložiteľný cez `ares_ciselnik` (kodCiselniku `DruhZarizeni`,
+    zdroj `nrpzs`). Kontakty sú inštitucionálne (recepcia/riaditeľstvo),
+    nie osobné."""
+
+    nazev: str = ""
+    druh_zarizeni: str = ""
+    adresa: str = ""
+    telefon: str = ""
+    email: str = ""
+    www: str = ""
+    primarni: bool = False
+
+
+class SubjektNrpzsData(BaseModel):
+    """Redukované dáta z Národného registra poskytovateľov zdravotných
+    služieb. Angažované osoby (`angazovaneOsoby`) sa **zámerne nenesú**
+    (PII) — nástroj je o zariadeniach a ich kontaktoch, nie o ľuďoch."""
+
+    ico: str
+    obchodni_jmeno: str = ""
+    pravni_forma: str = ""
+    zarizeni: list[ZarizeniNrpzs] = Field(default_factory=list)
+
+
+class SubjektNrpzsResult(EnvelopeBase):
+    """Výstup `ares_subjekt_nrpzs`."""
+
+    data: SubjektNrpzsData
