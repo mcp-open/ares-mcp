@@ -1,13 +1,15 @@
-# CI: pytest + build mcp-ares na self-hosted runneri (Hostinger VM).
-# Build kontext = ares/ + sdk/ (rovnaký tvar ako platform/deploy/Makefile
-# build-connector-ares). openmcp-sdk je privátne sesterské repo — checkout
-# cez org secret OPENMCP_SDK_TOKEN (fine-grained PAT, contents:read len na
-# mcp-open/openmcp-sdk).
+# CI+CD mcp-ares: pytest → build (kontext ares/ + sdk/, rovnaký tvar ako
+# platform/deploy/Makefile build-connector-ares) → repository_dispatch
+# `component-built` do mcp-open/platforma (CD bumpne digest v 87-mcp-ares.yaml
+# a nasadí). Org secret OPENMCP_CI_TOKEN = fine-grained PAT s contents:read
+# na openmcp-sdk (checkout) a contents:write na platforma (dispatch+bump).
 name: CI
 on:
   push:
     branches: [main]
   workflow_dispatch:
+
+concurrency: { group: ci-ares, cancel-in-progress: false }
 
 jobs:
   test:
@@ -18,7 +20,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: mcp-open/openmcp-sdk
-          token: ${{ secrets.OPENMCP_SDK_TOKEN }}
+          token: ${{ secrets.OPENMCP_CI_TOKEN }}
           path: sdk
       - name: Pytest (python kontajner)
         run: |
@@ -28,13 +30,15 @@ jobs:
   build:
     needs: test
     runs-on: self-hosted
+    outputs:
+      digest: ${{ steps.digest.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
         with: { path: ares }
       - uses: actions/checkout@v4
         with:
           repository: mcp-open/openmcp-sdk
-          token: ${{ secrets.OPENMCP_SDK_TOKEN }}
+          token: ${{ secrets.OPENMCP_CI_TOKEN }}
           path: sdk
       - name: Build + push mcp-ares
         run: |
@@ -43,5 +47,22 @@ jobs:
             -t localhost:30500/openmcp/mcp-ares:dev -t localhost:30500/openmcp/mcp-ares:$SHA .
           docker push -q localhost:30500/openmcp/mcp-ares:$SHA
           docker push -q localhost:30500/openmcp/mcp-ares:dev
+      - name: Digest
+        id: digest
+        run: |
           D=$(docker inspect --format='{{index .RepoDigests 0}}' localhost:30500/openmcp/mcp-ares:dev)
+          echo "digest=${D#*@}" >> "$GITHUB_OUTPUT"
           echo "**mcp-ares**: \`${D#*@}\`" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    needs: build
+    runs-on: self-hosted
+    steps:
+      - name: Dispatch deploy do platforma
+        run: |
+          curl -sf -X POST \
+            -H "Authorization: token ${{ secrets.OPENMCP_CI_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/mcp-open/platforma/dispatches \
+            -d '{"event_type":"component-built","client_payload":{"component":"mcp-ares","digest":"${{ needs.build.outputs.digest }}"}}'
+          echo "deploy odovzdaný CD workflowu v platforma repe"
