@@ -20,7 +20,8 @@ respektuje [SemVer](https://semver.org/lang/cs/).
   a **`registrace`** — seznam registrů, kde má subjekt aktivní záznam
   (navádí na follow-up nástroje `vr`/`rzp`/`res`/`nrpzs`).
 - **`connector.yaml`** — manifest pro katalog platformy (no-secret,
-  read-only, display sekce pro web detail, egress ares.gov.cz).
+  read-only, display sekce pro web detail, egress ares.gov.cz), včetně
+  `display.tools` — seznam všech 8 MCP nástrojů s popisy pro web detail.
 - Tento changelog.
 
 ## [0.1.0] – 2026-07-19

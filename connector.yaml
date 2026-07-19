@@ -29,6 +29,25 @@ display:
     - "Bez přihlášení a bez tajemství (no-secret konektor)"
   data_handling: "Jména statutárů z veřejného rejstříku jsou veřejný údaj a nástroj ares_subjekt_vr je vrací s výslovným upozorněním; datum narození a bydliště se do LLM nikdy nepřenášejí. Ostatní nástroje osobní údaje nevracejí."
   example_query: "Ověř mi firmu s IČO 27074358 a řekni, kdo ji zastupuje."
+  # Zoznam MCP nástrojov pre web detail (display.tools) — meno + jednoriadkový
+  # popis. Musí zodpovedať @mcp.tool dekorátorom v src/mcp_ares/server.py.
+  tools:
+    - name: ares_subjekt_lookup
+      description: "Detail subjektu podle IČO — jméno, sídlo, právní forma, DIČ, NACE a aktivní registry"
+    - name: ares_subjekt_vyhledat
+      description: "Hledání subjektů podle obchodního jména (volitelně upřesnění adresou), se stránkováním"
+    - name: ares_subjekt_vr
+      description: "Statutární orgán a předmět podnikání z veřejného rejstříku (jen jméno a funkce, bez data narození a bydliště)"
+    - name: ares_subjekt_rzp
+      description: "Živnosti a provozovny ze živnostenského rejstříku"
+    - name: ares_subjekt_res
+      description: "Statistické údaje z RES — klasifikace NACE a kategorie počtu zaměstnanců"
+    - name: ares_subjekt_nrpzs
+      description: "Zdravotnická zařízení subjektu z NRPZS včetně institucionálních kontaktů"
+    - name: ares_adresa_standardizovat
+      description: "Standardizace/našeptávač adresy podle RÚIAN z volného textu"
+    - name: ares_ciselnik
+      description: "Překlad číselníkových kódů na názvy (např. právní forma 112 → společnost s ručením omezeným)"
 
 egress:
   host: ares.gov.cz
