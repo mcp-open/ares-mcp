@@ -1,8 +1,7 @@
-# ARES no-secret referenčný connector (R1-WP06). Build context je nadradený
-# priečinok `platform/connectors/` (obsahuje `ares/` aj `sdk/`) — pozri
-# `deploy/Makefile` target `build-connector-ares`, ktorý oba priečinky
-# zabalí spolu, lebo `mcp-ares` závisí na `openmcp-sdk` (lokálny, nie PyPI
-# balík).
+# ARES no-secret referenčný connector (R1-WP06). Build context pripravuje
+# platform/deploy/Makefile (target `build-connector-ares`): tar zabalí
+# ares-mcp + openmcp-sdk z repos/konektory a premenuje ich na `ares/` +
+# `sdk/`, lebo `mcp-ares` závisí na `openmcp-sdk` (lokálny, nie PyPI balík).
 FROM python:3.13-slim
 
 WORKDIR /app
