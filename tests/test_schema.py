@@ -599,6 +599,29 @@ def test_ciselnik_orezanie_na_strop_s_warningom(monkeypatch: pytest.MonkeyPatch)
     assert any("vráceno prvních" in w for w in res.warnings)
 
 
+def test_ciselnik_filter_prehlada_dalsie_zdroje(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Kód, ktorý v prvom zdroji nie je, sa nájde v ďalšom (com → res) —
+    filter nesmie skončiť na prázdnom prvom číselníku."""
+    payload = {
+        "pocetCelkem": 2,
+        "ciselniky": [
+            {"kodCiselniku": "PravniForma", "zdrojCiselniku": "com",
+             "polozkyCiselniku": [
+                 {"kod": "205", "nazev": [{"kodJazyka": "cs", "nazev": "Iná forma (com)"}]}]},
+            {"kodCiselniku": "PravniForma", "zdrojCiselniku": "res",
+             "polozkyCiselniku": [
+                 {"kod": "112", "nazev": [{"kodJazyka": "cs", "nazev": "Společnost s ručením omezeným"}]}]},
+        ],
+    }
+    monkeypatch.setattr(
+        server.httpx, "post",
+        lambda url, json, timeout: httpx.Response(200, request=httpx.Request("POST", url), json=payload),
+    )
+    res = server.lookup_ciselnik("PravniForma", kod="112")
+    assert res.data.zdroj_ciselniku == "res"
+    assert [p.nazev for p in res.data.polozky] == ["Společnost s ručením omezeným"]
+
+
 def test_ciselnik_nenalezen_je_invalid_input(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         server.httpx, "post",

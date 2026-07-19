@@ -4,6 +4,14 @@ Všechny podstatné změny konektoru `mcp-ares`. Formát vychází
 z [Keep a Changelog](https://keepachangelog.com/cs/1.1.0/), verzování
 respektuje [SemVer](https://semver.org/lang/cs/).
 
+## [0.2.1] – 2026-07-20
+
+### Opraveno
+
+- `ares_ciselnik`: filtr `kod`/`hledat` prohledá všechny vrácené zdroje
+  číselníku, ne jen první — kód 112 (s.r.o.) je ve zdroji `res`, ale ne
+  v `com`, takže volání bez `zdroj` dřív vracelo prázdný výsledek.
+
 ## [0.2.0] – 2026-07-20
 
 ### Přidáno

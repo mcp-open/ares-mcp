@@ -578,7 +578,34 @@ def lookup_ciselnik(
         ciselniky = payload.get("ciselniky") or []
         if not ciselniky:
             raise ConnectorError(ErrorCode.INVALID_INPUT, f"číselník {k} nebyl nalezen")
+
+        hl = (hledat or "").strip().lower()
+        kd = (kod or "").strip()
+
+        def _filtruj(c: dict) -> list[CiselnikPolozka]:
+            out: list[CiselnikPolozka] = []
+            for p in c.get("polozkyCiselniku") or []:
+                pk = str(p.get("kod") or "")
+                nazev = _nazev_cs(p.get("nazev"))
+                if kd and pk != kd:
+                    continue
+                if hl and hl not in nazev.lower():
+                    continue
+                out.append(CiselnikPolozka(kod=pk, nazev=nazev))
+            return out
+
+        # Rovnaký kod číselníka môže existovať vo viacerých zdrojoch (com, res,
+        # rzp, …) s rôznym obsahom — pri aktívnom filtri vyber prvý zdroj, kde
+        # filter niečo našiel (kod 112 je v 'res', ale nie v 'com'); bez filtra
+        # ostáva prvý vrátený.
         c = ciselniky[0]
+        polozky = _filtruj(c)
+        if (kd or hl) and not polozky:
+            for kandidat in ciselniky[1:]:
+                najdene = _filtruj(kandidat)
+                if najdene:
+                    c, polozky = kandidat, najdene
+                    break
 
         warnings: list[str] = []
         if len(ciselniky) > 1:
@@ -587,18 +614,6 @@ def lookup_ciselnik(
                 f"Číselník existuje ve více zdrojích ({zdroje}); vrácen "
                 f"'{c.get('zdrojCiselniku')}' — upřesněte parametr 'zdroj'."
             )
-
-        hl = (hledat or "").strip().lower()
-        kd = (kod or "").strip()
-        polozky: list[CiselnikPolozka] = []
-        for p in c.get("polozkyCiselniku") or []:
-            pk = str(p.get("kod") or "")
-            nazev = _nazev_cs(p.get("nazev"))
-            if kd and pk != kd:
-                continue
-            if hl and hl not in nazev.lower():
-                continue
-            polozky.append(CiselnikPolozka(kod=pk, nazev=nazev))
     except ConnectorError:
         raise
     except (ValueError, ValidationError, TypeError, KeyError) as e:
