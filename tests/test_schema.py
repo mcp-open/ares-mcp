@@ -295,3 +295,127 @@ def test_vr_happy_path_nese_pii_warning(monkeypatch: pytest.MonkeyPatch) -> None
     res = server.lookup_vr(VALID_ICO)
     assert res.data.ico == VALID_ICO
     assert server.VR_PII_WARNING in res.warnings
+
+
+# --- ares_subjekt_rzp (živnosti a provozovny) -----------------------------
+
+def test_rzp_invalid_ico_neni_volan_upstream(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        server.httpx, "get",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("nemal sa volať")),
+    )
+    with pytest.raises(server.ConnectorError) as exc:
+        server.lookup_rzp("123")
+    assert exc.value.code is ErrorCode.INVALID_INPUT
+
+
+_RZP_ZAZNAM = {
+    "ico": VALID_ICO,
+    "obchodniJmeno": "Kaufland Česká republika v.o.s.",
+    "pravniForma": "121",
+    "zivnosti": [
+        {
+            "predmetPodnikani": "Výroba, obchod a služby",
+            "druhZivnosti": "O",
+            "provozovny": [
+                {"icp": 1001, "nazev": "Kaufland Třeboň", "typProvozovny": "1",
+                 "sidloProvozovny": {"textovaAdresa": "Jiráskova 1315, Třeboň"}},
+                {"icp": 1002, "nazev": "Kaufland Brno", "platnostDo": "2020-01-01",
+                 "sidloProvozovny": {"textovaAdresa": "Brno"}},  # zrušená
+            ],
+        },
+        {
+            "predmetPodnikani": "Hostinská činnost", "druhZivnosti": "R",
+            # stejná provozovna jako u první živnosti → deduplikace dle icp
+            "provozovny": [{"icp": 1001, "nazev": "Kaufland Třeboň",
+                            "sidloProvozovny": {"textovaAdresa": "Jiráskova 1315, Třeboň"}}],
+        },
+        {"predmetPodnikani": "Zaniklá živnost", "druhZivnosti": "V", "datumZaniku": "2015-01-01"},
+    ],
+}
+
+
+def test_rzp_reduce_filtruje_a_deduplikuje() -> None:
+    """Zaniklá živnost a zrušená provozovna vynechány; provozovna sdílená mezi
+    živnostmi je v seznamu jen jednou (dedup dle icp)."""
+    data = server._reduce_rzp(_RZP_ZAZNAM)
+    assert [z.predmet for z in data.zivnosti] == ["Výroba, obchod a služby", "Hostinská činnost"]
+    assert [p.nazev for p in data.provozovny] == ["Kaufland Třeboň"]
+    assert data.provozovny[0].adresa == "Jiráskova 1315, Třeboň"
+
+
+def test_rzp_prazdne_zaznamy_je_invalid_input(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        server.httpx, "get",
+        lambda url, timeout: httpx.Response(
+            200, request=httpx.Request("GET", url), json={"icoId": VALID_ICO, "zaznamy": []}
+        ),
+    )
+    with pytest.raises(server.ConnectorError) as exc:
+        server.lookup_rzp(VALID_ICO)
+    assert exc.value.code is ErrorCode.INVALID_INPUT
+
+
+# --- ares_subjekt_res (NACE, kategorie počtu zaměstnanců) ------------------
+
+def test_res_invalid_ico_neni_volan_upstream(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        server.httpx, "get",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("nemal sa volať")),
+    )
+    with pytest.raises(server.ConnectorError) as exc:
+        server.lookup_res("123")
+    assert exc.value.code is ErrorCode.INVALID_INPUT
+
+
+def test_res_happy_path_mapuje_nace_a_kategorii(monkeypatch: pytest.MonkeyPatch) -> None:
+    zaznam = {
+        "ico": VALID_ICO, "obchodniJmeno": "Asseco Central Europe, a.s.", "pravniForma": "121",
+        "sidlo": {"nazevObce": "Praha", "psc": 14000, "textovaAdresa": "Praha 4"},
+        "czNace": ["62010", 620], "statistickeUdaje": {"kategoriePoctuPracovniku": "330",
+                                                        "institucionalniSektor2010": "11003"},
+    }
+    monkeypatch.setattr(
+        server.httpx, "get",
+        lambda url, timeout: httpx.Response(
+            200, request=httpx.Request("GET", url), json={"icoId": VALID_ICO, "zaznamy": [zaznam]}
+        ),
+    )
+    res = server.lookup_res(VALID_ICO)
+    assert res.data.cz_nace == ["62010", "620"]
+    assert res.data.kategorie_poctu_pracovniku == "330"
+    assert res.data.sidlo is not None and res.data.sidlo.nazev_obce == "Praha"
+
+
+# --- ares_adresa_standardizovat -------------------------------------------
+
+def test_adresa_kratky_text_neni_volan_upstream(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        server.httpx, "post",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("nemal sa volať")),
+    )
+    with pytest.raises(server.ConnectorError) as exc:
+        server.standardizovat_adresu("Pr")
+    assert exc.value.code is ErrorCode.INVALID_INPUT
+
+
+def test_adresa_happy_path_posle_povinny_typ(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Filtr musí obsahovat povinný typStandardizaceAdresy; položky se namapují."""
+    payload = {
+        "pocetCelkem": 1,
+        "standardizovaneAdresy": [
+            {"textovaAdresa": "Bucharova 2657/12, Praha 5", "nazevObce": "Praha",
+             "nazevUlice": "Bucharova", "cisloDomovni": 2657, "psc": 15800,
+             "kodAdresnihoMista": 27736342},
+        ],
+    }
+
+    def fake_post(url: str, json: dict, timeout: object) -> httpx.Response:
+        assert json["typStandardizaceAdresy"] == server.ADRESA_TYP_STANDARDIZACE
+        return httpx.Response(200, request=httpx.Request("POST", url), json=payload)
+
+    monkeypatch.setattr(server.httpx, "post", fake_post)
+    res = server.standardizovat_adresu("Bucharova 2657 Praha", pocet=2)
+    assert res.data.pocet_celkem == 1
+    assert res.data.adresy[0].nazev_obce == "Praha"
+    assert res.data.adresy[0].psc == 15800

@@ -111,3 +111,84 @@ class SubjektVrResult(EnvelopeBase):
     """Výstup `ares_subjekt_vr` — vždy nesie PII varovanie vo `warnings`."""
 
     data: SubjektVrData
+
+
+class ZivnostItem(BaseModel):
+    """Jedna živnosť — predmet + druh (R=řemeslná, V=volná, O=vázaná,
+    K/Z=koncesovaná; kód `druhZivnosti` z ARES ponechaný surový)."""
+
+    predmet: str
+    druh: str = ""
+
+
+class ProvozovnaItem(BaseModel):
+    """Jedna prevádzkareň — názov + textová adresa. Bez PII."""
+
+    nazev: str = ""
+    adresa: str = ""
+    typ: str = ""
+
+
+class SubjektRzpData(BaseModel):
+    """Redukované dáta zo Živnostenského registra — aktuálne živnosti a
+    prevádzkarne. Osoby (`angazovaneOsoby`/`odpovedniZastupci`) sa **nenesú**
+    (PII), tento nástroj je o predmete podnikania a prevádzkach, nie o ľuďoch."""
+
+    ico: str
+    obchodni_jmeno: str = ""
+    pravni_forma: str = ""
+    zivnosti: list[ZivnostItem] = Field(default_factory=list)
+    provozovny: list[ProvozovnaItem] = Field(default_factory=list)
+
+
+class SubjektRzpResult(EnvelopeBase):
+    """Výstup `ares_subjekt_rzp`."""
+
+    data: SubjektRzpData
+
+
+class SubjektResData(BaseModel):
+    """Redukované dáta z Registra ekonomických subjektov (RES) — pridáva NACE
+    a kategóriu počtu zamestnancov nad rámec agregovaného lookupu."""
+
+    ico: str
+    obchodni_jmeno: str = ""
+    pravni_forma: str = ""
+    sidlo: Sidlo | None = None
+    cz_nace: list[str] = Field(default_factory=list)
+    kategorie_poctu_pracovniku: str = ""
+    institucionalni_sektor: str = ""
+
+
+class SubjektResResult(EnvelopeBase):
+    """Výstup `ares_subjekt_res`."""
+
+    data: SubjektResData
+
+
+class AdresaItem(BaseModel):
+    """Jedna štandardizovaná (RÚIAN) adresa. `AdresaItem(**item)` funguje priamo
+    nad položkou ARES; extra polia (kódy krajov/obcí, …) Pydantic ignoruje."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    textova_adresa: str = Field(alias="textovaAdresa", default="")
+    nazev_obce: str = Field(alias="nazevObce", default="")
+    nazev_ulice: str = Field(alias="nazevUlice", default="")
+    cislo_domovni: int | None = Field(alias="cisloDomovni", default=None)
+    psc: int | None = Field(alias="psc", default=None)
+    kod_adresniho_mista: int | None = Field(alias="kodAdresnihoMista", default=None)
+
+
+class AdresaSeznamData(BaseModel):
+    """Výsledok štandardizácie adresy — echo `pocet` + `pocet_celkem`."""
+
+    pocet_celkem: int
+    pocet: int
+    adresy: list[AdresaItem] = Field(default_factory=list)
+
+
+class AdresaSeznamResult(EnvelopeBase):
+    """Výstup `ares_adresa_standardizovat`."""
+
+    data: AdresaSeznamData

@@ -22,20 +22,40 @@ from pydantic import ValidationError
 from openmcp_sdk.envelope import ConnectorError, ErrorCode, Provenance, now_utc_iso
 
 from mcp_ares.schemas import (
+    AdresaItem,
+    AdresaSeznamData,
+    AdresaSeznamResult,
+    ProvozovnaItem,
+    Sidlo,
     StatutarniClen,
     SubjektData,
+    SubjektResData,
+    SubjektResResult,
     SubjektResult,
+    SubjektRzpData,
+    SubjektRzpResult,
     SubjektSeznamData,
     SubjektSeznamResult,
     SubjektSummary,
     SubjektVrData,
     SubjektVrResult,
+    ZivnostItem,
 )
 
-ARES_BASE_URL = "https://ares.gov.cz/ekonomicke-subjekty-v-be/rest/ekonomicke-subjekty"
-# Veřejný (obchodní) rejstřík — samostatný endpoint (statutární orgán, předmět
-# podnikání), ktoré agregovaný `ekonomicke-subjekty/{ico}` nenesie.
-ARES_VR_BASE_URL = "https://ares.gov.cz/ekonomicke-subjekty-v-be/rest/ekonomicke-subjekty-vr"
+_ARES_REST = "https://ares.gov.cz/ekonomicke-subjekty-v-be/rest"
+ARES_BASE_URL = f"{_ARES_REST}/ekonomicke-subjekty"
+# Samostatné registre — nesú dáta, ktoré agregovaný `ekonomicke-subjekty/{ico}`
+# neobsahuje: VR (štatutárny orgán, predmet podnikania), RŽP (živnosti,
+# prevádzkarne), RES (NACE, kategória počtu zamestnancov).
+ARES_VR_BASE_URL = f"{_ARES_REST}/ekonomicke-subjekty-vr"
+ARES_RZP_BASE_URL = f"{_ARES_REST}/ekonomicke-subjekty-rzp"
+ARES_RES_BASE_URL = f"{_ARES_REST}/ekonomicke-subjekty-res"
+ARES_ADRESY_URL = f"{_ARES_REST}/standardizovane-adresy/vyhledat"
+
+# `typStandardizaceAdresy` je povinný atribut filtra štandardizácie; ARES dovolí
+# len UPLNA_STANDARDIZACE | VYHOVUJICI_ADRESY — berieme úplnú štandardizáciu.
+ADRESA_TYP_STANDARDIZACE = "UPLNA_STANDARDIZACE"
+MAX_ADRES = 20
 
 # Vlastný strop veľkosti stránky vyhľadávania — chráni LLM kontext pred
 # zahltením (ARES dovolí viac, ale desiatky subjektov v jednej odpovedi nemajú
@@ -322,6 +342,158 @@ def _reduce_vr(zaznam: dict) -> SubjektVrData:
     )
 
 
+def lookup_rzp(ico: str) -> SubjektRzpResult:
+    """Business logika `ares_subjekt_rzp` — živnosti a provozovny ze
+    Živnostenského rejstříku. Bez PII (osoby se nepřenášejí)."""
+    if not ICO_RE.fullmatch(ico) or not ico_checksum(ico):
+        raise ConnectorError(
+            ErrorCode.INVALID_INPUT, "IČO musí mít 8 číslic a platný kontrolní součet"
+        )
+
+    resp = _call(lambda: _get(f"{ARES_RZP_BASE_URL}/{ico}"))
+    _raise_for_status(resp, not_found_msg=f"IČO {ico} není v živnostenském rejstříku")
+
+    payload = _json_dict(resp)
+    try:
+        zaznamy = payload.get("zaznamy") or []
+        if not zaznamy:
+            raise ConnectorError(
+                ErrorCode.INVALID_INPUT, f"IČO {ico} nemá záznam v živnostenském rejstříku"
+            )
+        data = _reduce_rzp(zaznamy[0])
+    except ConnectorError:
+        raise
+    except (ValueError, ValidationError, TypeError, KeyError) as e:
+        raise ConnectorError(
+            ErrorCode.INTERNAL, f"ARES odpověď neodpovídá očekávanému schématu: {e}"
+        ) from e
+
+    return SubjektRzpResult(data=data, provenance=_provenance(resp), warnings=[])
+
+
+def _reduce_rzp(zaznam: dict) -> SubjektRzpData:
+    """Zredukuje RŽP záznam — iba **aktuálne** (nezaniknuté) živnosti a
+    prevádzkarne. Prevádzkarne sú vnorené pod každou živnosťou a naprieč nimi
+    sa opakujú → deduplikácia podľa `icp`. Osoby sa zámerne nenesú (PII)."""
+    zivnosti: list[ZivnostItem] = []
+    provozovny: dict = {}
+
+    def _sber_provozoven(zdroj: list) -> None:
+        for p in zdroj or []:
+            if p.get("platnostDo"):  # zrušená prevádzkareň
+                continue
+            icp = p.get("icp")
+            key = icp if icp is not None else id(p)
+            if key in provozovny:
+                continue
+            provozovny[key] = ProvozovnaItem(
+                nazev=p.get("nazev") or "",
+                adresa=(p.get("sidloProvozovny") or {}).get("textovaAdresa") or "",
+                typ=str(p.get("typProvozovny") or ""),
+            )
+
+    for zi in zaznam.get("zivnosti") or []:
+        if zi.get("datumZaniku"):  # zaniknutá živnosť
+            continue
+        predmet = zi.get("predmetPodnikani") or ""
+        if predmet:
+            zivnosti.append(ZivnostItem(predmet=predmet, druh=zi.get("druhZivnosti") or ""))
+        _sber_provozoven(zi.get("provozovny") or [])
+
+    _sber_provozoven(zaznam.get("provozovny") or [])  # niekedy aj top-level
+
+    return SubjektRzpData(
+        ico=zaznam.get("ico") or "",
+        obchodni_jmeno=zaznam.get("obchodniJmeno") or "",
+        pravni_forma=zaznam.get("pravniForma") or "",
+        zivnosti=zivnosti,
+        provozovny=list(provozovny.values()),
+    )
+
+
+def lookup_res(ico: str) -> SubjektResResult:
+    """Business logika `ares_subjekt_res` — NACE a kategória počtu zamestnancov
+    z Registra ekonomických subjektov (nad rámec agregovaného lookupu)."""
+    if not ICO_RE.fullmatch(ico) or not ico_checksum(ico):
+        raise ConnectorError(
+            ErrorCode.INVALID_INPUT, "IČO musí mít 8 číslic a platný kontrolní součet"
+        )
+
+    resp = _call(lambda: _get(f"{ARES_RES_BASE_URL}/{ico}"))
+    _raise_for_status(resp, not_found_msg=f"IČO {ico} není v registru ekonomických subjektů")
+
+    payload = _json_dict(resp)
+    try:
+        zaznamy = payload.get("zaznamy") or []
+        if not zaznamy:
+            raise ConnectorError(
+                ErrorCode.INVALID_INPUT, f"IČO {ico} nemá záznam v RES"
+            )
+        z = zaznamy[0]
+        stat = z.get("statistickeUdaje") or {}
+        sidlo_raw = z.get("sidlo")
+        data = SubjektResData(
+            ico=z.get("ico") or "",
+            obchodni_jmeno=z.get("obchodniJmeno") or "",
+            pravni_forma=z.get("pravniForma") or "",
+            sidlo=Sidlo(**sidlo_raw) if isinstance(sidlo_raw, dict) else None,
+            cz_nace=[str(x) for x in (z.get("czNace") or [])],
+            kategorie_poctu_pracovniku=str(stat.get("kategoriePoctuPracovniku") or ""),
+            institucionalni_sektor=str(stat.get("institucionalniSektor2010") or ""),
+        )
+    except ConnectorError:
+        raise
+    except (ValueError, ValidationError, TypeError, KeyError) as e:
+        raise ConnectorError(
+            ErrorCode.INTERNAL, f"ARES odpověď neodpovídá očekávanému schématu: {e}"
+        ) from e
+
+    return SubjektResResult(data=data, provenance=_provenance(resp), warnings=[])
+
+
+def standardizovat_adresu(text: str, pocet: int = 5) -> AdresaSeznamResult:
+    """Business logika `ares_adresa_standardizovat` — RÚIAN standardizace/
+    našeptávač adresy podle volného textu."""
+    t = (text or "").strip()
+    if len(t) < 3:
+        raise ConnectorError(ErrorCode.INVALID_INPUT, "adresa musí mít alespoň 3 znaky")
+    if not 1 <= pocet <= MAX_ADRES:
+        raise ConnectorError(
+            ErrorCode.INVALID_INPUT, f"pocet musí být v rozsahu 1..{MAX_ADRES}"
+        )
+
+    filtr = {
+        "textovaAdresa": t,
+        "typStandardizaceAdresy": ADRESA_TYP_STANDARDIZACE,
+        "start": 0,
+        "pocet": pocet,
+    }
+    resp = _call(lambda: _post(ARES_ADRESY_URL, filtr))
+    _raise_for_status(resp, not_found_msg="ARES standardizace nevrátila výsledek")
+
+    payload = _json_dict(resp)
+    try:
+        celkem = int(payload.get("pocetCelkem", 0))
+        items = payload.get("standardizovaneAdresy") or []
+        adresy = [AdresaItem(**it) for it in items]
+    except (ValueError, ValidationError, TypeError) as e:
+        raise ConnectorError(
+            ErrorCode.INTERNAL, f"ARES odpověď neodpovídá očekávanému schématu: {e}"
+        ) from e
+
+    warnings: list[str] = []
+    if celkem == 0:
+        warnings.append("Žádná adresa neodpovídá zadání.")
+    elif celkem > len(adresy):
+        warnings.append(f"Nalezeno {celkem} adres, vráceno {len(adresy)} (upřesněte zadání).")
+
+    return AdresaSeznamResult(
+        data=AdresaSeznamData(pocet_celkem=celkem, pocet=pocet, adresy=adresy),
+        provenance=_provenance(resp),
+        warnings=warnings,
+    )
+
+
 # Štruktúrované JSON logovanie (openmcp_sdk) — centrálny collector (Vector) ho
 # rozbalí do poľa .app rovnako ako slog logy api/gateway. Component z env
 # OPENMCP_COMPONENT (default mcp-ares); OPENMCP_LOG_FORMAT=text pre lokálny dev.
@@ -336,7 +508,9 @@ mcp: FastMCP = FastMCP(
         "Vyhledávání ekonomických subjektů v českém ARES. Veřejné API, bez přihlášení. "
         "Nástroje: ares_subjekt_lookup (detail podle IČO), ares_subjekt_vyhledat "
         "(hledání podle obchodního jména), ares_subjekt_vr (statutární orgán a předmět "
-        "podnikání z veřejného rejstříku — obsahuje osobní údaje)."
+        "podnikání z veřejného rejstříku — obsahuje osobní údaje), ares_subjekt_rzp "
+        "(živnosti a provozovny), ares_subjekt_res (NACE a kategorie počtu zaměstnanců), "
+        "ares_adresa_standardizovat (standardizace/našeptávač adresy podle RÚIAN)."
     ),
 )
 
@@ -369,6 +543,36 @@ def ares_subjekt_vr(ico: str) -> SubjektVrResult:
     adresa bydliště jsou záměrně vynechány).
     """
     return lookup_vr(ico)
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+def ares_subjekt_rzp(ico: str) -> SubjektRzpResult:
+    """Živnosti a provozovny subjektu ze živnostenského rejstříku (podle IČO).
+
+    Vrací aktuální předměty podnikání (živnosti) a aktivní provozovny (název +
+    adresa). Neobsahuje osobní údaje.
+    """
+    return lookup_rzp(ico)
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+def ares_subjekt_res(ico: str) -> SubjektResResult:
+    """Statistické údaje subjektu z registru ekonomických subjektů (RES) podle IČO.
+
+    Doplňuje k základnímu detailu klasifikaci NACE a kategorii počtu zaměstnanců.
+    """
+    return lookup_res(ico)
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+def ares_adresa_standardizovat(text: str, pocet: int = 5) -> AdresaSeznamResult:
+    """Standardizuje adresu podle RÚIAN (našeptávač) — z volného textu vrátí
+    strukturované adresy.
+
+    `text` min. 3 znaky; `pocet` 1..20. Užitečné pro ověření/normalizaci adresy
+    před vyhledáváním subjektu.
+    """
+    return standardizovat_adresu(text, pocet=pocet)
 
 
 def main() -> None:
