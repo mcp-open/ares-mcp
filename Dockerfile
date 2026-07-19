@@ -18,6 +18,12 @@ RUN pip install --no-cache-dir --no-compile ./sdk ./ares
 RUN useradd --uid 10001 --system --no-create-home --shell /usr/sbin/nologin openmcp
 USER 10001
 
+# `python -m mcp_ares.server` volá run_connector("connector.yaml", mcp)
+# s relatívnou cestou — WORKDIR musí byť priečinok s connector.yaml
+# (rovnaký vzor ako raynet-mcp/platform/Dockerfile; balík mcp_ares je
+# nainštalovaný cez pip, importovateľný nezávisle od cwd).
+WORKDIR /app/ares
+
 EXPOSE 8000
 
 ENTRYPOINT ["python", "-m", "mcp_ares.server"]
