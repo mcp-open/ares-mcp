@@ -1,0 +1,47 @@
+# CI: pytest + build mcp-ares na self-hosted runneri (Hostinger VM).
+# Build kontext = ares/ + sdk/ (rovnaký tvar ako platform/deploy/Makefile
+# build-connector-ares). openmcp-sdk je privátne sesterské repo — checkout
+# cez org secret OPENMCP_SDK_TOKEN (fine-grained PAT, contents:read len na
+# mcp-open/openmcp-sdk).
+name: CI
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: ares }
+      - uses: actions/checkout@v4
+        with:
+          repository: mcp-open/openmcp-sdk
+          token: ${{ secrets.OPENMCP_SDK_TOKEN }}
+          path: sdk
+      - name: Pytest (python kontajner)
+        run: |
+          docker run --rm -v "$PWD":/src -w /src python:3.13-slim sh -c \
+            "pip install -q --no-cache-dir ./sdk ./ares pytest && python -m pytest ares/tests -q"
+
+  build:
+    needs: test
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: ares }
+      - uses: actions/checkout@v4
+        with:
+          repository: mcp-open/openmcp-sdk
+          token: ${{ secrets.OPENMCP_SDK_TOKEN }}
+          path: sdk
+      - name: Build + push mcp-ares
+        run: |
+          SHA=${GITHUB_SHA::7}
+          docker build -q -f ares/Dockerfile \
+            -t localhost:30500/openmcp/mcp-ares:dev -t localhost:30500/openmcp/mcp-ares:$SHA .
+          docker push -q localhost:30500/openmcp/mcp-ares:$SHA
+          docker push -q localhost:30500/openmcp/mcp-ares:dev
+          D=$(docker inspect --format='{{index .RepoDigests 0}}' localhost:30500/openmcp/mcp-ares:dev)
+          echo "**mcp-ares**: \`${D#*@}\`" >> "$GITHUB_STEP_SUMMARY"
