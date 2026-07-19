@@ -125,3 +125,173 @@ def test_valid_ico_checksum_pozitivny_kontrolny_pripad() -> None:
     `ico_checksum` mimo piatich povinných negatívnych prípadov)."""
     assert server.ICO_RE.fullmatch(VALID_ICO)
     assert server.ico_checksum(VALID_ICO)
+
+
+# --- ares_subjekt_vyhledat (search) ---------------------------------------
+
+def test_search_kratke_jmeno_neni_volan_upstream(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Jméno < 2 znaky → invalid_input bez POST na upstream."""
+    def fake_post(*a: object, **k: object) -> httpx.Response:
+        raise AssertionError("upstream sa nemal volať pre krátke jméno")
+
+    monkeypatch.setattr(server.httpx, "post", fake_post)
+    with pytest.raises(server.ConnectorError) as exc:
+        server.search_subjekt("A")
+    assert exc.value.code is ErrorCode.INVALID_INPUT
+
+
+def test_search_pocet_mimo_rozsah_neni_volan_upstream(monkeypatch: pytest.MonkeyPatch) -> None:
+    """pocet mimo 1..MAX_POCET → invalid_input bez upstreamu."""
+    monkeypatch.setattr(
+        server.httpx, "post",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("nemal sa volať")),
+    )
+    with pytest.raises(server.ConnectorError) as exc:
+        server.search_subjekt("Alza", pocet=server.MAX_POCET + 1)
+    assert exc.value.code is ErrorCode.INVALID_INPUT
+
+
+def test_search_happy_path_mapuje_polozky_a_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Položka s `ico` i položka bez `ico` (jen icoId) se namapují; celkem >
+    vráceno → warning o oříznutí."""
+    payload = {
+        "pocetCelkem": 3,
+        "ekonomickeSubjekty": [
+            {"ico": "27074358", "obchodniJmeno": "Asseco Central Europe, a.s.",
+             "pravniForma": "121", "sidlo": {"nazevObce": "Praha", "psc": 14000}},
+            {"icoId": "ARES_00363445", "obchodniJmeno": "Asseco CE Cloud, a.s.",
+             "pravniForma": "421", "sidlo": {"kodStatu": "SK", "pscTxt": "82104"}},
+        ],
+    }
+
+    def fake_post(url: str, json: dict, timeout: object) -> httpx.Response:
+        assert json["obchodniJmeno"] == "Asseco"
+        return httpx.Response(200, request=httpx.Request("POST", url), json=payload)
+
+    monkeypatch.setattr(server.httpx, "post", fake_post)
+    res = server.search_subjekt("Asseco", pocet=2)
+    assert res.data.pocet_celkem == 3
+    assert [s.ico for s in res.data.subjekty] == ["27074358", None]
+    assert res.warnings and "Nalezeno 3" in res.warnings[0]
+
+
+def test_search_prazdny_vysledek_warning_ne_chyba(monkeypatch: pytest.MonkeyPatch) -> None:
+    """0 výsledků → validní envelope s prázdným seznamem + warning (ne chyba)."""
+    monkeypatch.setattr(
+        server.httpx, "post",
+        lambda url, json, timeout: httpx.Response(
+            200, request=httpx.Request("POST", url), json={"pocetCelkem": 0, "ekonomickeSubjekty": []}
+        ),
+    )
+    res = server.search_subjekt("Neexistujici Firma XYZ")
+    assert res.data.subjekty == []
+    assert res.warnings and "Žádný" in res.warnings[0]
+
+
+def test_search_400_je_invalid_input(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ARES 400 (neplatný filtr) → invalid_input."""
+    monkeypatch.setattr(
+        server.httpx, "post",
+        lambda url, json, timeout: httpx.Response(400, request=httpx.Request("POST", url), text="bad"),
+    )
+    with pytest.raises(server.ConnectorError) as exc:
+        server.search_subjekt("Alza")
+    assert exc.value.code is ErrorCode.INVALID_INPUT
+
+
+# --- ares_subjekt_vr (veřejný rejstřík, PII minimalizace) ------------------
+
+def test_vr_invalid_ico_neni_volan_upstream(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Neplatné IČO → invalid_input bez GET na upstream."""
+    def fake_get(*a: object, **k: object) -> httpx.Response:
+        raise AssertionError("upstream sa nemal volať pre neplatné IČO")
+
+    monkeypatch.setattr(server.httpx, "get", fake_get)
+    with pytest.raises(server.ConnectorError) as exc:
+        server.lookup_vr("123")
+    assert exc.value.code is ErrorCode.INVALID_INPUT
+
+
+def test_vr_prazdne_zaznamy_je_invalid_input(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Subjekt bez záznamu ve VR (např. OSVČ) → invalid_input, ne internal."""
+    monkeypatch.setattr(
+        server.httpx, "get",
+        lambda url, timeout: httpx.Response(
+            200, request=httpx.Request("GET", url), json={"icoId": VALID_ICO, "zaznamy": []}
+        ),
+    )
+    with pytest.raises(server.ConnectorError) as exc:
+        server.lookup_vr(VALID_ICO)
+    assert exc.value.code is ErrorCode.INVALID_INPUT
+
+
+_VR_ZAZNAM = {
+    # Identitná polia sú vo VR temporálne histórie, nie skaláry — aktuálna
+    # hodnota je záznam bez `datumVymazu`.
+    "ico": [{"datumZapisu": "2003-08-06", "hodnota": VALID_ICO}],
+    "obchodniJmeno": [
+        {"datumZapisu": "2003-08-06", "datumVymazu": "2004-03-01", "hodnota": "Staré Jméno, a.s."},
+        {"datumZapisu": "2004-03-01", "hodnota": "Asseco Central Europe, a.s."},
+    ],
+    "pravniForma": [{"datumZapisu": "2003-08-06", "hodnota": "121"}],
+    "spisovaZnacka": [{"datumZapisu": "2003-08-06", "soud": "MSPH", "oddil": "B", "vlozka": 8525}],
+    "statutarniOrgany": [
+        {
+            "nazevOrganu": "představenstvo",
+            "clenoveOrganu": [
+                {
+                    "clenstvi": {"funkce": {"nazev": "člen představenstva"}},
+                    "fyzickaOsoba": {
+                        "jmeno": "MAREK", "prijmeni": "GRÁC",
+                        "datumNarozeni": "1972-01-14",
+                        "adresa": {"textovaAdresa": "Stredná 27, Bratislava"},
+                    },
+                },
+                {  # bývalý člen — má datumVymazu, musí být vynechán
+                    "datumVymazu": "2020-10-16",
+                    "fyzickaOsoba": {"jmeno": "BÝVALÝ", "prijmeni": "ČLEN", "datumNarozeni": "1960-01-01"},
+                },
+            ],
+        },
+        {  # zrušený orgán — celý vynechán
+            "datumVymazu": "2019-01-01", "nazevOrganu": "starý orgán",
+            "clenoveOrganu": [{"fyzickaOsoba": {"jmeno": "X", "prijmeni": "Y"}}],
+        },
+    ],
+    "cinnosti": {
+        "predmetPodnikani": [
+            {"hodnota": "Činnost účetních poradců"},
+            {"datumVymazu": "2009-05-04", "hodnota": "Ubytovací služby"},
+        ]
+    },
+}
+
+
+def test_vr_reduce_filtruje_a_neuniknou_pii() -> None:
+    """`_reduce_vr`: jen aktuální člen + funkce; bývalý člen/orgán a zrušený
+    předmět vynechány; datum narození ani adresa NEuniknou do výstupu."""
+    data = server._reduce_vr(_VR_ZAZNAM)
+    # aktuálna hodnota z temporálnych polí (nie stará/vymazaná)
+    assert data.ico == VALID_ICO
+    assert data.obchodni_jmeno == "Asseco Central Europe, a.s."
+    assert data.spisova_znacka == "B 8525"
+    assert [c.jmeno for c in data.statutarni_organ] == ["MAREK GRÁC"]
+    assert data.statutarni_organ[0].funkce == "člen představenstva"
+    assert data.statutarni_organ[0].organ == "představenstvo"
+    assert data.predmet_podnikani == ["Činnost účetních poradců"]
+    # PII nesmí být nikde v serializovaném výstupu
+    blob = data.model_dump_json()
+    assert "1972" not in blob and "Stredná" not in blob and "datumNarozeni" not in blob
+
+
+def test_vr_happy_path_nese_pii_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Kompletní VR volání vrací PII warning ve `warnings`."""
+    monkeypatch.setattr(
+        server.httpx, "get",
+        lambda url, timeout: httpx.Response(
+            200, request=httpx.Request("GET", url), json={"icoId": VALID_ICO, "zaznamy": [_VR_ZAZNAM]}
+        ),
+    )
+    res = server.lookup_vr(VALID_ICO)
+    assert res.data.ico == VALID_ICO
+    assert server.VR_PII_WARNING in res.warnings

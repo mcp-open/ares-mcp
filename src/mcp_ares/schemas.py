@@ -45,3 +45,69 @@ class SubjektResult(EnvelopeBase):
     """Výstup `ares_subjekt_lookup` — `data` + zdedené `provenance`/`warnings`."""
 
     data: SubjektData
+
+
+class SubjektSummary(BaseModel):
+    """Jedna položka výsledku vyhledávania (`/ekonomicke-subjekty/vyhledat`).
+
+    Redukovaný výrez — na rozdiel od single-lookupu položka zoznamu nemusí mať
+    `ico` (zahraničné subjekty nesú iba `icoId` ako `ARES_...`), preto je `ico`
+    voliteľné. Extra polia z ARES (financniUrad, czNace, seznamRegistraci, …)
+    Pydantic ignoruje. `SubjektSummary(**item)` funguje priamo nad položkou.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    ico: str | None = None
+    obchodni_jmeno: str = Field(alias="obchodniJmeno")
+    pravni_forma: str = Field(alias="pravniForma", default="")
+    sidlo: Sidlo | None = None
+
+
+class SubjektSeznamData(BaseModel):
+    """Stránka výsledku vyhledávania — echo stránkovania + `pocet_celkem`, aby
+    LLM vedelo o orezaní (ARES vráti len `pocet` položiek z `pocet_celkem`)."""
+
+    pocet_celkem: int
+    start: int
+    pocet: int
+    subjekty: list[SubjektSummary] = Field(default_factory=list)
+
+
+class SubjektSeznamResult(EnvelopeBase):
+    """Výstup `ares_subjekt_vyhledat`."""
+
+    data: SubjektSeznamData
+
+
+class StatutarniClen(BaseModel):
+    """PII-minimalizovaný člen štatutárneho orgánu.
+
+    Nesie iba **meno + funkciu + názov orgánu** — meno je verejný údaj
+    obchodného registra a je účelom tohto nástroja (kto firmu zastupuje).
+    `datumNarozeni`, adresa bydliska a štátne občianstvo, ktoré ARES vracia,
+    sa do LLM **zámerne neprenášajú** (viď `mcp_ares.server._reduce_vr` a
+    trvalé PII varovanie v `SubjektVrResult.warnings`).
+    """
+
+    jmeno: str
+    funkce: str = ""
+    organ: str = ""
+
+
+class SubjektVrData(BaseModel):
+    """Redukované dáta z Veřejného (obchodného) registra pre dané IČO —
+    aktuálni (nevymazaní) štatutári a aktuálny predmet podnikania."""
+
+    ico: str
+    obchodni_jmeno: str = ""
+    pravni_forma: str = ""
+    spisova_znacka: str = ""
+    statutarni_organ: list[StatutarniClen] = Field(default_factory=list)
+    predmet_podnikani: list[str] = Field(default_factory=list)
+
+
+class SubjektVrResult(EnvelopeBase):
+    """Výstup `ares_subjekt_vr` — vždy nesie PII varovanie vo `warnings`."""
+
+    data: SubjektVrData
