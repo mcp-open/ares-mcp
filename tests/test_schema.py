@@ -120,6 +120,28 @@ def test_non_object_json_body_je_internal(monkeypatch: pytest.MonkeyPatch) -> No
         assert exc_info.value.code is ErrorCode.INTERNAL
 
 
+def test_non_json_body_je_internal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """200 s telom, ktoré nie je JSON (HTML chybovka z proxy) → internal.
+
+    Predtým `_json_dict` nechal `JSONDecodeError` preletieť a zachytila ju až
+    `except (ValueError, ...)` u volajúceho — teda náhodou cez dedičnosť.
+    """
+    def fake_get(url: str, timeout: object) -> httpx.Response:
+        return httpx.Response(
+            200,
+            request=httpx.Request("GET", url),
+            content=b"<html><body>502 Bad Gateway</body></html>",
+            headers={"content-type": "text/html"},
+        )
+
+    monkeypatch.setattr(server.httpx, "get", fake_get)
+
+    with pytest.raises(server.ConnectorError) as exc_info:
+        server.lookup_subjekt(VALID_ICO)
+
+    assert exc_info.value.code is ErrorCode.INTERNAL
+
+
 def test_valid_ico_checksum_pozitivny_kontrolny_pripad() -> None:
     """Kontrolný súčet skutočného IČO je platný (pozitívny sanity check pre
     `ico_checksum` mimo piatich povinných negatívnych prípadov)."""

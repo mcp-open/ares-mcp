@@ -143,10 +143,22 @@ def _raise_for_status(resp: httpx.Response, *, not_found_msg: str) -> None:
 
 
 def _json_dict(resp: httpx.Response) -> dict:
-    """`resp.json()` s poistkou na ne-objektové telo (C16 bug scan) — ARES môže
-    pri chybe/proxy vrátiť 200 s poľom/skalárom; to je `internal`, nie
-    neošetrený TypeError na `Model(**payload)`."""
-    payload = resp.json()
+    """`resp.json()` s poistkou na ne-objektové aj nevalidné telo (C16 bug scan).
+
+    ARES môže pri chybe/proxy vrátiť 200 s poľom, skalárom alebo rovno HTML
+    chybovou stránkou. Oboje je `internal`, nie neošetrený `TypeError` na
+    `Model(**payload)` resp. `JSONDecodeError`.
+
+    `JSONDecodeError` síce dedí z `ValueError`, takže by ju volajúci zachytili
+    aj bez tohto bloku — ale iba náhodou cez dedičnosť. Kontrakt „vráť dict
+    alebo ConnectorError" má plniť táto funkcia sama.
+    """
+    try:
+        payload = resp.json()
+    except ValueError as e:
+        raise ConnectorError(
+            ErrorCode.INTERNAL, "ARES vrátil odpověď, která není platný JSON"
+        ) from e
     if not isinstance(payload, dict):
         raise ConnectorError(
             ErrorCode.INTERNAL, "ARES vrátil neočekávaný tvar odpovědi (není objekt)"

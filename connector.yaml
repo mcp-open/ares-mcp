@@ -1,6 +1,6 @@
 slug: ares
 name: ARES
-version: 0.2.0
+version: 0.2.1
 category: registry
 summary: >
   Vyhledávání v českém ARES — ověření firmy podle IČO (jméno, sídlo, právní
@@ -17,9 +17,16 @@ operator_config: []
 capabilities:
   default_read_only: true
   supports_write: false
+  # supports_test zámerne CHÝBA (default false), na rozdiel od raynetu.
+  # `/test` overuje credentials konkrétneho používateľa — ARES žiadne nemá
+  # (`credentials: []`), takže by mohol testovať len dostupnosť upstreamu.
+  # To je vec monitoringu platformy (SPEC-003 `ops.synthetic`), nie tlačidla
+  # pri konektore. SDK invariant (runtime.py) vyžaduje, aby sa toto pole
+  # zhodovalo s tým, či `run_connector` dostane `test_connection` — nemeniť
+  # jedno bez druhého.
 
 # display (manifest.display) — kurátorovaný verejný manifest pro web detail
-# (stejný vzor jako raynet-mcp/platform/connector.yaml).
+# (stejný vzor jako raynet-mcp/connector.yaml).
 display:
   capabilities:
     - "Ověřit firmu podle IČO — obchodní jméno, sídlo, právní forma, DIČ, NACE"

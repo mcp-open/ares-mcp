@@ -12,6 +12,14 @@ dependencies = [
   "httpx>=0.28,<0.29",
 ]
 
+[project.optional-dependencies]
+# CI ich doteraz inštalovalo ad hoc v run kroku — deklarované sú overiteľné
+# a `pip install -e .[test]` stačí na lokálne spustenie celej suity.
+test = [
+  "pytest==8.4.2",
+  "pyyaml==6.0.2",
+]
+
 [project.scripts]
 mcp-ares = "mcp_ares.server:main"
 

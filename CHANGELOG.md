@@ -4,6 +4,32 @@ Všechny podstatné změny konektoru `mcp-ares`. Formát vychází
 z [Keep a Changelog](https://keepachangelog.com/cs/1.1.0/), verzování
 respektuje [SemVer](https://semver.org/lang/cs/).
 
+## [Nevydáno]
+
+### Opraveno
+
+- `connector.yaml` deklaroval verzi `0.2.0`, zatímco balíček byl na `0.2.1` —
+  katalog hlásil starou verzi. Nový test `test_manifest_version_matches_package`
+  hlídá, aby se to znovu nerozešlo.
+- `_json_dict` neošetřoval `JSONDecodeError` z `resp.json()`. Při HTTP 200
+  s ne-JSON tělem (chybová HTML stránka z proxy) chybu zachytil až volající
+  přes `except ValueError` — tedy jen náhodou skrz dědičnost. Funkce teď plní
+  svůj kontrakt sama a vrací `internal` s jasnou hláškou.
+
+### Přidáno
+
+- `tests/test_manifest.py` — validace manifestu, soulad `display.tools`
+  s registrovanými nástroji a kontrola invariantu `supports_test` vs. předání
+  `test_connection` do `run_connector`.
+- `[project.optional-dependencies] test` — dřív CI instalovalo `pytest`
+  ad hoc v run kroku.
+
+### Poznámky
+
+- `supports_test` zůstává vypnuté a je to teď zdokumentované v manifestu:
+  ARES nemá credentials, takže `/test` by ověřoval jen dostupnost upstreamu,
+  což patří do monitoringu platformy (SPEC-003 `ops.synthetic`).
+
 ## [0.2.1] – 2026-07-20
 
 ### Opraveno

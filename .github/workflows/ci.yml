@@ -25,7 +25,7 @@ jobs:
       - name: Pytest (python kontajner)
         run: |
           docker run --rm -v "$PWD":/src -w /src python:3.13-slim sh -c \
-            "pip install -q --no-cache-dir ./sdk ./ares pytest && python -m pytest ares/tests -q"
+            "pip install -q --no-cache-dir ./sdk './ares[test]' && python -m pytest ares/tests -q"
 
   build:
     needs: test
