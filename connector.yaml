@@ -16,6 +16,7 @@ operator_config: []
 
 capabilities:
   default_read_only: true
+  supports_write: false
 
 # display (manifest.display) — kurátorovaný verejný manifest pro web detail
 # (stejný vzor jako raynet-mcp/platform/connector.yaml).
