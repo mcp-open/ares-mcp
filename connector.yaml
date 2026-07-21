@@ -17,12 +17,12 @@ operator_config: []
 capabilities:
   default_read_only: true
   supports_write: false
-  # supports_test zámerne CHÝBA (default false), na rozdiel od raynetu.
-  # `/test` overuje credentials konkrétneho používateľa — ARES žiadne nemá
-  # (`credentials: []`), takže by mohol testovať len dostupnosť upstreamu.
-  # To je vec monitoringu platformy (SPEC-003 `ops.synthetic`), nie tlačidla
-  # pri konektore. SDK invariant (runtime.py) vyžaduje, aby sa toto pole
-  # zhodovalo s tým, či `run_connector` dostane `test_connection` — nemeniť
+  # supports_test záměrně CHYBÍ (default false), na rozdíl od raynetu.
+  # `/test` ověřuje credentials konkrétního uživatele — ARES žádné nemá
+  # (`credentials: []`), takže by mohl testovat jen dostupnost upstreamu.
+  # To je věc monitoringu platformy (SPEC-003 `ops.synthetic`), ne tlačítka
+  # u konektoru. SDK invariant (runtime.py) vyžaduje, aby se toto pole
+  # shodovalo s tím, zda `run_connector` dostane `test_connection` — neměnit
   # jedno bez druhého.
 
 # display (manifest.display) — kurátorovaný verejný manifest pro web detail
@@ -37,8 +37,8 @@ display:
     - "Bez přihlášení a bez tajemství (no-secret konektor)"
   data_handling: "Jména statutárů z veřejného rejstříku jsou veřejný údaj a nástroj ares_subjekt_vr je vrací s výslovným upozorněním; datum narození a bydliště se do LLM nikdy nepřenášejí. Ostatní nástroje osobní údaje nevracejí."
   example_query: "Ověř mi firmu s IČO 27074358 a řekni, kdo ji zastupuje."
-  # Zoznam MCP nástrojov pre web detail (display.tools) — meno + jednoriadkový
-  # popis. Musí zodpovedať @mcp.tool dekorátorom v src/mcp_ares/server.py.
+  # Seznam MCP nástrojů pro web detail (display.tools) — jméno + jednořádkový
+  # popis. Musí odpovídat @mcp.tool dekorátorům v src/connector/server.py.
   tools:
     - name: ares_subjekt_lookup
       description: "Detail subjektu podle IČO — jméno, sídlo, právní forma, DIČ, NACE a aktivní registry"

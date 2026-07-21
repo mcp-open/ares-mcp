@@ -1,7 +1,7 @@
 # ARES no-secret referenčný connector (R1-WP06). Build context pripravuje
 # platform/deploy/Makefile (target `build-connector-ares`): tar zabalí
 # ares-mcp + openmcp-sdk z repos/konektory a premenuje ich na `ares/` +
-# `sdk/`, lebo `mcp-ares` závisí na `openmcp-sdk` (lokálny, nie PyPI balík).
+# `sdk/`, lebo `ares-mcp` závisí na `openmcp-sdk` (lokálny, nie PyPI balík).
 FROM python:3.13-slim
 
 WORKDIR /app
@@ -18,7 +18,7 @@ RUN pip install --no-cache-dir --no-compile ./sdk ./ares
 RUN useradd --uid 10001 --system --no-create-home --shell /usr/sbin/nologin openmcp
 USER 10001
 
-# `python -m mcp_ares.server` volá run_connector("connector.yaml", mcp)
+# `python -m connector` volá run_connector("connector.yaml", mcp)
 # s relatívnou cestou — WORKDIR musí byť priečinok s connector.yaml
 # (rovnaký vzor ako raynet-mcp/platform/Dockerfile; balík mcp_ares je
 # nainštalovaný cez pip, importovateľný nezávisle od cwd).

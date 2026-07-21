@@ -1,5 +1,5 @@
-# CI+CD konektora: test → build → deploy (repository_dispatch `component-built`
-# do mcp-open/platforma, kde CD bumpne digest v manifeste a nasadí).
+# CI+CD konektoru: test → build → deploy (repository_dispatch `component-built`
+# do mcp-open/platforma, kde CD bumpne digest v manifestu a nasadí).
 #
 # Org secret OPENMCP_CI_TOKEN = fine-grained PAT s contents:read na openmcp-sdk
 # (checkout) a contents:write na platforma (dispatch + bump digestu).
@@ -22,9 +22,9 @@ jobs:
       - uses: actions/checkout@v4
         with: { path: "${{ env.SLUG }}" }
 
-      # SDK pin žije v súbore .sdk-ref, nie v tomto workflow: bump SDK je potom
-      # jednoriadkový diff v PR, ktorý sa dá reviewovať, a ten istý ref si
-      # vezme aj lokálny vývoj.
+      # SDK pin žije v souboru .sdk-ref, ne v tomto workflow: bump SDK je potom
+      # jednořádkový diff v PR, který se dá reviewovat, a ten samý ref si
+      # vezme i lokální vývoj.
       - id: sdkref
         run: echo "ref=$(tr -d '[:space:]' < "${SLUG}/.sdk-ref")" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
@@ -41,15 +41,15 @@ jobs:
             pip install -q --no-cache-dir ./sdk "./'"$SLUG"'[test]"
             ruff check '"$SLUG"'/src '"$SLUG"'/tests
             mypy '"$SLUG"'/src
-            # Validuje proti SDK schéme AJ invariantom platformy, takže
-            # "prešlo" znamená "platforma to prijme".
+            # Validuje proti SDK schématu I invariantům platformy, takže
+            # "prošlo" znamená "platforma to přijme".
             (cd '"$SLUG"' && openmcp-sdk validate connector.yaml)
             python -m pytest '"$SLUG"'/tests -q
           '
 
   build:
     needs: test
-    if: github.event_name != 'pull_request' # PR sa iba testuje
+    if: github.event_name != 'pull_request' # PR se pouze testuje
     runs-on: self-hosted
     outputs: { digest: "${{ steps.digest.outputs.digest }}" }
     steps:
@@ -72,9 +72,9 @@ jobs:
           docker push -q "$IMG:$SHA"
           docker push -q "$IMG:dev"
 
-      # Kontajner musí naozaj nabehnúť. Chytí zlý WORKDIR, chýbajúci
-      # connector.yaml v image aj manifest, ktorý zhodí štart — teda presne to,
-      # čo inak praskne až pri rollout-e.
+      # Kontejner musí opravdu naběhnout. Chytí špatný WORKDIR, chybějící
+      # connector.yaml v image i manifest, který shodí start — tedy přesně to,
+      # co jinak praskne až při rollout-u.
       - name: Smoke test image
         run: |
           TOKEN=$(head -c 48 /dev/urandom | base64 | tr -d '\n')

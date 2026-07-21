@@ -1,10 +1,10 @@
-"""Pydantic modely pre ARES connector — vstup aj štruktúrovaný výstup.
+"""Pydantic modely pro ARES connector — vstup i strukturovaný výstup.
 
-`SubjektData` je zámerne redukovaný výrez skutočnej ARES odpovede (REST
-`ekonomicke-subjekty/{ico}`) — nesie polia, ktoré US-01 (Petra, účetní) a
-podobné user stories z konceptu potrebujú na overenie firmy podľa IČO, nie
-celý ARES payload (desiatky polí seznamRegistraci/dalsiUdaje nie sú súčasťou
-kontraktu tohto WP).
+`SubjektData` je záměrně redukovaný výřez skutečné ARES odpovědi (REST
+`ekonomicke-subjekty/{ico}`) — nese pole, která US-01 (Petra, účetní) a
+podobné user stories z konceptu potřebují k ověření firmy podle IČO, ne
+celý ARES payload (desítky polí seznamRegistraci/dalsiUdaje nejsou součástí
+kontraktu tohoto WP).
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class Sidlo(BaseModel):
-    """Sídlo ekonomického subjektu — redukovaný výrez ARES `sidlo` objektu."""
+    """Sídlo ekonomického subjektu — redukovaný výřez ARES `sidlo` objektu."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -24,10 +24,10 @@ class Sidlo(BaseModel):
 
 
 class SubjektData(BaseModel):
-    """Ekonomický subjekt podľa IČO — redukovaný výrez ARES odpovede.
+    """Ekonomický subjekt podle IČO — redukovaný výřez ARES odpovědi.
 
-    Aliasy zodpovedajú presne poľom ARES REST API, aby `SubjektData(**json)`
-    fungovalo priamo nad upstream odpoveďou bez ručného mapovania.
+    Aliasy odpovídají přesně polím ARES REST API, aby `SubjektData(**json)`
+    fungovalo přímo nad upstream odpovědí bez ručního mapování.
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -39,25 +39,25 @@ class SubjektData(BaseModel):
     dic: str | None = Field(default=None)
     sidlo: Sidlo
     cz_nace: list[str] = Field(alias="czNace", default_factory=list)
-    # Zoznam registrov s AKTIVNÍ záznamom (odvodené zo `seznamRegistraci`,
-    # plní `server.lookup_subjekt`) — navádza LLM, ktorý follow-up nástroj má
-    # zmysel volať (vr → ares_subjekt_vr, rzp → ares_subjekt_rzp, …).
+    # Seznam registrů s AKTIVNÍM záznamem (odvozené ze `seznamRegistraci`,
+    # plní `server.lookup_subjekt`) — navádí LLM, který follow-up nástroj má
+    # smysl volat (vr → ares_subjekt_vr, rzp → ares_subjekt_rzp, …).
     registrace: list[str] = Field(default_factory=list)
 
 
 class SubjektResult(EnvelopeBase):
-    """Výstup `ares_subjekt_lookup` — `data` + zdedené `provenance`/`warnings`."""
+    """Výstup `ares_subjekt_lookup` — `data` + zděděné `provenance`/`warnings`."""
 
     data: SubjektData
 
 
 class SubjektSummary(BaseModel):
-    """Jedna položka výsledku vyhledávania (`/ekonomicke-subjekty/vyhledat`).
+    """Jedna položka výsledku vyhledávání (`/ekonomicke-subjekty/vyhledat`).
 
-    Redukovaný výrez — na rozdiel od single-lookupu položka zoznamu nemusí mať
-    `ico` (zahraničné subjekty nesú iba `icoId` ako `ARES_...`), preto je `ico`
-    voliteľné. Extra polia z ARES (financniUrad, czNace, seznamRegistraci, …)
-    Pydantic ignoruje. `SubjektSummary(**item)` funguje priamo nad položkou.
+    Redukovaný výřez — na rozdíl od single-lookupu položka seznamu nemusí mít
+    `ico` (zahraniční subjekty nesou pouze `icoId` jako `ARES_...`), proto je
+    `ico` volitelné. Extra pole z ARES (financniUrad, czNace, seznamRegistraci, …)
+    Pydantic ignoruje. `SubjektSummary(**item)` funguje přímo nad položkou.
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -69,8 +69,8 @@ class SubjektSummary(BaseModel):
 
 
 class SubjektSeznamData(BaseModel):
-    """Stránka výsledku vyhledávania — echo stránkovania + `pocet_celkem`, aby
-    LLM vedelo o orezaní (ARES vráti len `pocet` položiek z `pocet_celkem`)."""
+    """Stránka výsledku vyhledávání — echo stránkování + `pocet_celkem`, aby
+    LLM vědělo o oříznutí (ARES vrátí jen `pocet` položek z `pocet_celkem`)."""
 
     pocet_celkem: int
     start: int
@@ -85,13 +85,13 @@ class SubjektSeznamResult(EnvelopeBase):
 
 
 class StatutarniClen(BaseModel):
-    """PII-minimalizovaný člen štatutárneho orgánu.
+    """PII-minimalizovaný člen statutárního orgánu.
 
-    Nesie iba **meno + funkciu + názov orgánu** — meno je verejný údaj
-    obchodného registra a je účelom tohto nástroja (kto firmu zastupuje).
-    `datumNarozeni`, adresa bydliska a štátne občianstvo, ktoré ARES vracia,
-    sa do LLM **zámerne neprenášajú** (viď `connector.server._reduce_vr` a
-    trvalé PII varovanie v `SubjektVrResult.warnings`).
+    Nese pouze **jméno + funkci + název orgánu** — jméno je veřejný údaj
+    obchodního rejstříku a je účelem tohoto nástroje (kdo firmu zastupuje).
+    `datumNarozeni`, adresa bydliště a státní občanství, které ARES vrací,
+    se do LLM **záměrně nepřenášejí** (viz `connector.server._reduce_vr` a
+    trvalé PII varování v `SubjektVrResult.warnings`).
     """
 
     jmeno: str
@@ -100,8 +100,8 @@ class StatutarniClen(BaseModel):
 
 
 class SubjektVrData(BaseModel):
-    """Redukované dáta z Veřejného (obchodného) registra pre dané IČO —
-    aktuálni (nevymazaní) štatutári a aktuálny predmet podnikania."""
+    """Redukovaná data z Veřejného (obchodního) rejstříku pro dané IČO —
+    aktuální (nevymazaní) statutáři a aktuální předmět podnikání."""
 
     ico: str
     obchodni_jmeno: str = ""
@@ -112,21 +112,21 @@ class SubjektVrData(BaseModel):
 
 
 class SubjektVrResult(EnvelopeBase):
-    """Výstup `ares_subjekt_vr` — vždy nesie PII varovanie vo `warnings`."""
+    """Výstup `ares_subjekt_vr` — vždy nese PII varování ve `warnings`."""
 
     data: SubjektVrData
 
 
 class ZivnostItem(BaseModel):
-    """Jedna živnosť — predmet + druh (R=řemeslná, V=volná, O=vázaná,
-    K/Z=koncesovaná; kód `druhZivnosti` z ARES ponechaný surový)."""
+    """Jedna živnost — předmět + druh (R=řemeslná, V=volná, O=vázaná,
+    K/Z=koncesovaná; kód `druhZivnosti` z ARES ponechán surový)."""
 
     predmet: str
     druh: str = ""
 
 
 class ProvozovnaItem(BaseModel):
-    """Jedna prevádzkareň — názov + textová adresa. Bez PII."""
+    """Jedna provozovna — název + textová adresa. Bez PII."""
 
     nazev: str = ""
     adresa: str = ""
@@ -134,9 +134,9 @@ class ProvozovnaItem(BaseModel):
 
 
 class SubjektRzpData(BaseModel):
-    """Redukované dáta zo Živnostenského registra — aktuálne živnosti a
-    prevádzkarne. Osoby (`angazovaneOsoby`/`odpovedniZastupci`) sa **nenesú**
-    (PII), tento nástroj je o predmete podnikania a prevádzkach, nie o ľuďoch."""
+    """Redukovaná data ze Živnostenského rejstříku — aktuální živnosti a
+    provozovny. Osoby (`angazovaneOsoby`/`odpovedniZastupci`) se **nenesou**
+    (PII), tento nástroj je o předmětu podnikání a provozovnách, ne o lidech."""
 
     ico: str
     obchodni_jmeno: str = ""
@@ -152,8 +152,8 @@ class SubjektRzpResult(EnvelopeBase):
 
 
 class SubjektResData(BaseModel):
-    """Redukované dáta z Registra ekonomických subjektov (RES) — pridáva NACE
-    a kategóriu počtu zamestnancov nad rámec agregovaného lookupu."""
+    """Redukovaná data z Registru ekonomických subjektů (RES) — přidává NACE
+    a kategorii počtu zaměstnanců nad rámec agregovaného lookupu."""
 
     ico: str
     obchodni_jmeno: str = ""
@@ -171,8 +171,8 @@ class SubjektResResult(EnvelopeBase):
 
 
 class AdresaItem(BaseModel):
-    """Jedna štandardizovaná (RÚIAN) adresa. `AdresaItem(**item)` funguje priamo
-    nad položkou ARES; extra polia (kódy krajov/obcí, …) Pydantic ignoruje."""
+    """Jedna standardizovaná (RÚIAN) adresa. `AdresaItem(**item)` funguje přímo
+    nad položkou ARES; extra pole (kódy krajů/obcí, …) Pydantic ignoruje."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -185,7 +185,7 @@ class AdresaItem(BaseModel):
 
 
 class AdresaSeznamData(BaseModel):
-    """Výsledok štandardizácie adresy — echo `pocet` + `pocet_celkem`."""
+    """Výsledek standardizace adresy — echo `pocet` + `pocet_celkem`."""
 
     pocet_celkem: int
     pocet: int
@@ -200,16 +200,16 @@ class AdresaSeznamResult(EnvelopeBase):
 
 class CiselnikPolozka(BaseModel):
     """Jedna položka číselníku — kód + český název. Historické (už neplatné)
-    položky sa nesú tiež: staršie subjekty ich kódy stále používajú."""
+    položky se nesou také: starší subjekty jejich kódy stále používají."""
 
     kod: str
     nazev: str = ""
 
 
 class CiselnikData(BaseModel):
-    """Položky jedného ARES číselníka (napr. `PravniForma`) — preklad kódov
-    z odpovedí ostatných nástrojov na ľudské názvy. `pocet_celkem` je počet
-    položiek po aplikovaní filtra (pred orezaním na strop)."""
+    """Položky jednoho ARES číselníku (např. `PravniForma`) — překlad kódů
+    z odpovědí ostatních nástrojů na lidské názvy. `pocet_celkem` je počet
+    položek po aplikování filtru (před oříznutím na strop)."""
 
     kod_ciselniku: str
     nazev_ciselniku: str = ""
@@ -225,10 +225,10 @@ class CiselnikResult(EnvelopeBase):
 
 
 class ZarizeniNrpzs(BaseModel):
-    """Jedno zdravotnícke zariadenie/pracovisko z NRPZS. `druh_zarizeni` je
-    kód — preložiteľný cez `ares_ciselnik` (kodCiselniku `DruhZarizeni`,
-    zdroj `nrpzs`). Kontakty sú inštitucionálne (recepcia/riaditeľstvo),
-    nie osobné."""
+    """Jedno zdravotnické zařízení/pracoviště z NRPZS. `druh_zarizeni` je
+    kód — přeložitelný přes `ares_ciselnik` (kodCiselniku `DruhZarizeni`,
+    zdroj `nrpzs`). Kontakty jsou institucionální (recepce/ředitelství),
+    ne osobní."""
 
     nazev: str = ""
     druh_zarizeni: str = ""
@@ -240,9 +240,9 @@ class ZarizeniNrpzs(BaseModel):
 
 
 class SubjektNrpzsData(BaseModel):
-    """Redukované dáta z Národného registra poskytovateľov zdravotných
-    služieb. Angažované osoby (`angazovaneOsoby`) sa **zámerne nenesú**
-    (PII) — nástroj je o zariadeniach a ich kontaktoch, nie o ľuďoch."""
+    """Redukovaná data z Národního registru poskytovatelů zdravotních
+    služeb. Angažované osoby (`angazovaneOsoby`) se **záměrně nenesou**
+    (PII) — nástroj je o zařízeních a jejich kontaktech, ne o lidech."""
 
     ico: str
     obchodni_jmeno: str = ""

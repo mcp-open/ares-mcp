@@ -1,13 +1,13 @@
-"""ARES no-secret referenčný connector (R1-WP06).
+"""ARES no-secret referenční connector (R1-WP06).
 
-FastMCP Streamable HTTP server nad verejným ARES REST API
-(`ekonomicke-subjekty-v-be/rest/ekonomicke-subjekty/{ico}`) — žiadny
-credential, žiadny Vault, žiadny Broker (D-017 scope: no-secret connector).
+FastMCP Streamable HTTP server nad veřejným ARES REST API
+(`ekonomicke-subjekty-v-be/rest/ekonomicke-subjekty/{ico}`) — žádný
+credential, žádný Vault, žádný Broker (D-017 scope: no-secret connector).
 
 Gateway (WP02, `platform/gateway/internal/proxy/proxy.go:UpstreamURL`)
-proxuje na `http://mcp-ares.openmcp.svc.cluster.local:8000/mcp` — preto tento
-proces musí počúvať na porte 8000 a ceste `/mcp` (FastMCP defaulty, explicitne
-uvedené nižšie kvôli auditovateľnosti).
+proxuje na `http://mcp-ares.openmcp.svc.cluster.local:8000/mcp` — proto tento
+proces musí naslouchat na portu 8000 a cestě `/mcp` (FastMCP defaulty, explicitně
+uvedené níže kvůli auditovatelnosti).
 """
 
 from __future__ import annotations
@@ -51,9 +51,9 @@ from connector.schemas import (
 
 _ARES_REST = "https://ares.gov.cz/ekonomicke-subjekty-v-be/rest"
 ARES_BASE_URL = f"{_ARES_REST}/ekonomicke-subjekty"
-# Samostatné registre — nesú dáta, ktoré agregovaný `ekonomicke-subjekty/{ico}`
-# neobsahuje: VR (štatutárny orgán, predmet podnikania), RŽP (živnosti,
-# prevádzkarne), RES (NACE, kategória počtu zamestnancov).
+# Samostatné registry — nesou data, která agregovaný `ekonomicke-subjekty/{ico}`
+# neobsahuje: VR (statutární orgán, předmět podnikání), RŽP (živnosti,
+# provozovny), RES (NACE, kategorie počtu zaměstnanců).
 ARES_VR_BASE_URL = f"{_ARES_REST}/ekonomicke-subjekty-vr"
 ARES_RZP_BASE_URL = f"{_ARES_REST}/ekonomicke-subjekty-rzp"
 ARES_RES_BASE_URL = f"{_ARES_REST}/ekonomicke-subjekty-res"
@@ -61,47 +61,47 @@ ARES_NRPZS_BASE_URL = f"{_ARES_REST}/ekonomicke-subjekty-nrpzs"
 ARES_ADRESY_URL = f"{_ARES_REST}/standardizovane-adresy/vyhledat"
 ARES_CISELNIKY_URL = f"{_ARES_REST}/ciselniky-nazevniky/vyhledat"
 
-# `typStandardizaceAdresy` je povinný atribut filtra štandardizácie; ARES dovolí
-# len UPLNA_STANDARDIZACE | VYHOVUJICI_ADRESY — berieme úplnú štandardizáciu.
+# `typStandardizaceAdresy` je povinný atribut filtru standardizace; ARES dovolí
+# jen UPLNA_STANDARDIZACE | VYHOVUJICI_ADRESY — bereme úplnou standardizaci.
 ADRESA_TYP_STANDARDIZACE = "UPLNA_STANDARDIZACE"
 MAX_ADRES = 20
 
-# Stropy pre číselníky a NRPZS zariadenia — rovnaká motivácia ako MAX_POCET:
-# ochrana LLM kontextu (PravniForma má ~300 položiek, nemocničná sieť môže mať
-# desiatky pracovísk; warning v odpovedi povie o orezaní).
+# Stropy pro číselníky a NRPZS zařízení — stejná motivace jako MAX_POCET:
+# ochrana LLM kontextu (PravniForma má ~300 položek, nemocniční síť může mít
+# desítky pracovišť; warning v odpovědi řekne o oříznutí).
 MAX_CISELNIK_POLOZEK = 50
 MAX_ZARIZENI = 50
 
-# Vlastný strop veľkosti stránky vyhľadávania — chráni LLM kontext pred
-# zahltením (ARES dovolí viac, ale desiatky subjektov v jednej odpovedi nemajú
-# pre asistenta zmysel; `pocet_celkem` v odpovedi povie o orezaní).
+# Vlastní strop velikosti stránky vyhledávání — chrání LLM kontext před
+# zahlcením (ARES dovolí víc, ale desítky subjektů v jedné odpovědi nemají
+# pro asistenta smysl; `pocet_celkem` v odpovědi řekne o oříznutí).
 MAX_POCET = 50
 
-# Trvalé PII varovanie k VR výstupu — mená štatutárov sú verejný údaj registra,
-# ale výslovne označíme, že odpoveď obsahuje osobné údaje fyzických osôb.
+# Trvalé PII varování k VR výstupu — jména statutárů jsou veřejný údaj rejstříku,
+# ale výslovně označíme, že odpověď obsahuje osobní údaje fyzických osob.
 VR_PII_WARNING = (
     "Obsahuje jména fyzických osob z veřejného rejstříku. "
     "Datum narození a adresa bydliště byly záměrně vynechány."
 )
 
-# IČO = 8 číslic, kontrolný súčet podľa vyhlášky (modulo 11, váhy 8..2 na
-# prvých 7 číslic). Bez tvarovej zhody sa upstream vôbec nevolá (J1 krok 3).
+# IČO = 8 číslic, kontrolní součet podle vyhlášky (modulo 11, váhy 8..2 na
+# prvních 7 číslic). Bez tvarové shody se upstream vůbec nevolá (J1 krok 3).
 ICO_RE = re.compile(r"^\d{8}$")
 
-# Krátky, ohraničený timeout — connector je interný bezstavový workload nad
-# externým verejným API, nie dlhobežiaci proces (koncept: "bezpečnosť nie je
-# demokratická", ale ohraničenosť čakania je hygiena, nie bezpečnostná otázka).
+# Krátký, ohraničený timeout — connector je interní bezstavový workload nad
+# externím veřejným API, ne dlouhoběžící proces (koncept: "bezpečnost není
+# demokratická", ale ohraničenost čekání je hygiena, ne bezpečnostní otázka).
 BOUNDED_TIMEOUT = httpx.Timeout(5.0, connect=3.0)
 
 
 def ico_checksum(ico: str) -> bool:
-    """Overí kontrolný súčet 8-miestneho IČO (modulo 11, váhy 8..2).
+    """Ověří kontrolní součet 8místného IČO (modulo 11, váhy 8..2).
 
-    Predpokladá, že `ico` už prešlo `ICO_RE.fullmatch` (presne 8 číslic).
+    Předpokládá, že `ico` už prošlo `ICO_RE.fullmatch` (přesně 8 číslic).
     """
     digits = [int(c) for c in ico]
-    # strict=True: obe sekvencie majú presne 7 prvkov, takže tichá nezhoda by
-    # bola chyba vo výpočte kontrolného súčtu, nie legitímny stav.
+    # strict=True: obě sekvence mají přesně 7 prvků, takže tichá neshoda by
+    # byla chyba ve výpočtu kontrolního součtu, ne legitimní stav.
     total = sum(d * w for d, w in zip(digits[:7], range(8, 1, -1), strict=True))
     remainder = total % 11
     if remainder in (0, 10):
@@ -114,21 +114,21 @@ def ico_checksum(ico: str) -> bool:
 
 
 def _get(url: str) -> httpx.Response:
-    """Jedno GET upstream volanie — žiadny automatický retry (bounded retry=0)."""
+    """Jedno GET upstream volání — žádný automatický retry (bounded retry=0)."""
     return httpx.get(url, timeout=BOUNDED_TIMEOUT)
 
 
 def _post(url: str, body: dict[str, Any]) -> httpx.Response:
-    """Jedno POST upstream volanie (vyhľadávanie) — bounded retry=0."""
+    """Jedno POST upstream volání (vyhledávání) — bounded retry=0."""
     return httpx.post(url, json=body, timeout=BOUNDED_TIMEOUT)
 
 
 def _raise_for_status(resp: httpx.Response, *, not_found_msg: str) -> None:
-    """Spoločné mapovanie HTTP statusov na typované `ConnectorError`.
+    """Společné mapování HTTP statusů na typované `ConnectorError`.
 
-    Zhodné pre všetky tri nástroje: 429→rate_limited, 404→invalid_input
-    (`not_found_msg`), iné 4xx→invalid_input (napr. ARES odmietne neplatný
-    filter pri vyhľadávaní), 5xx→upstream_error. 2xx/3xx prejde bez chyby.
+    Shodné pro všechny tři nástroje: 429→rate_limited, 404→invalid_input
+    (`not_found_msg`), jiné 4xx→invalid_input (např. ARES odmítne neplatný
+    filtr při vyhledávání), 5xx→upstream_error. 2xx/3xx projde bez chyby.
     """
     if resp.status_code == 429:
         raise ConnectorError(ErrorCode.RATE_LIMITED, "ARES vrátil 429 Too Many Requests")
@@ -145,15 +145,15 @@ def _raise_for_status(resp: httpx.Response, *, not_found_msg: str) -> None:
 
 
 def _json_dict(resp: httpx.Response) -> dict[str, Any]:
-    """`resp.json()` s poistkou na ne-objektové aj nevalidné telo (C16 bug scan).
+    """`resp.json()` s pojistkou na ne-objektové i nevalidní tělo (C16 bug scan).
 
-    ARES môže pri chybe/proxy vrátiť 200 s poľom, skalárom alebo rovno HTML
-    chybovou stránkou. Oboje je `internal`, nie neošetrený `TypeError` na
+    ARES může při chybě/proxy vrátit 200 s polem, skalárem nebo rovnou HTML
+    chybovou stránkou. Obojí je `internal`, ne neošetřený `TypeError` na
     `Model(**payload)` resp. `JSONDecodeError`.
 
-    `JSONDecodeError` síce dedí z `ValueError`, takže by ju volajúci zachytili
-    aj bez tohto bloku — ale iba náhodou cez dedičnosť. Kontrakt „vráť dict
-    alebo ConnectorError" má plniť táto funkcia sama.
+    `JSONDecodeError` sice dědí z `ValueError`, takže by ji volající zachytili
+    i bez tohoto bloku — ale jen náhodou přes dědičnost. Kontrakt „vrať dict
+    nebo ConnectorError" má plnit tato funkce sama.
     """
     try:
         payload = resp.json()
@@ -169,9 +169,9 @@ def _json_dict(resp: httpx.Response) -> dict[str, Any]:
 
 
 def _call(do_request: Callable[[], httpx.Response]) -> httpx.Response:
-    """Vykoná jedno upstream volanie a namapuje httpx zlyhania na typované
-    `ConnectorError` (timeout/spojenie → upstream_unavailable). Bounded
-    retry=0 — `do_request` sa volá práve raz."""
+    """Vykoná jedno upstream volání a namapuje httpx selhání na typované
+    `ConnectorError` (timeout/spojení → upstream_unavailable). Bounded
+    retry=0 — `do_request` se volá právě jednou."""
     try:
         return do_request()
     except httpx.TimeoutException as e:
@@ -183,7 +183,7 @@ def _call(do_request: Callable[[], httpx.Response]) -> httpx.Response:
 
 
 def _provenance(resp: httpx.Response) -> Provenance:
-    """Provenance pre live ARES odpoveď — `source_url` je skutočná volaná URL."""
+    """Provenance pro live ARES odpověď — `source_url` je skutečná volaná URL."""
     return Provenance(
         source_id="ares",
         source_url=str(resp.url),
@@ -192,10 +192,10 @@ def _provenance(resp: httpx.Response) -> Provenance:
     )
 
 
-# Logging nastavuje `run_connector` sám (od SDK 0.4) — component odvodí zo
-# slugu v manifeste. Volať `logging.setup()` tu na úrovni importu je zlá
-# vrstva: pri importe modulu v teste alebo nástroji by prepísalo cudziu
-# konfiguráciu.
+# Logging nastavuje `run_connector` sám (od SDK 0.4) — component odvodí ze
+# slugu v manifestu. Volat `logging.setup()` tu na úrovni importu je špatná
+# vrstva: při importu modulu v testu nebo nástroji by přepsalo cizí
+# konfiguraci.
 
 mcp: FastMCP = FastMCP(
     "ares",
@@ -242,9 +242,9 @@ def lookup_subjekt(ico: str) -> SubjektResult:
 
 
 def _aktivni_registrace(seznam: object) -> list[str]:
-    """Zo `seznamRegistraci` (kľúče `stavZdrojeXxx`) vráti zoznam registrov
-    s hodnotou AKTIVNI ako lowercase skratky (`vr`, `res`, `rzp`, `dph`, …) —
-    LLM z nich vidí, ktorý follow-up nástroj má zmysel volať."""
+    """Ze `seznamRegistraci` (klíče `stavZdrojeXxx`) vrátí seznam registrů
+    s hodnotou AKTIVNI jako lowercase zkratky (`vr`, `res`, `rzp`, `dph`, …) —
+    LLM z nich vidí, který follow-up nástroj má smysl volat."""
     if not isinstance(seznam, dict):
         return []
     prefix = "stavZdroje"
@@ -265,6 +265,8 @@ def search_subjekt(
     upřesnění sídla (např. město). `pocet` 1..50, `start` = offset pro stránkování.
     Vrací stránku výsledků + `pocet_celkem` (kolik jich ARES našel celkem).
     """
+    # ARES vyžaduje `obchodniJmeno` jako primární filtr — samotná adresa či
+    # právní forma vrátí 400. Proto je jméno povinné a adresa jen upřesnění.
     jmeno = (obchodni_jmeno or "").strip()
     if len(jmeno) < 2:
         raise ConnectorError(
@@ -280,8 +282,8 @@ def search_subjekt(
     filtr: dict[str, Any] = {"obchodniJmeno": jmeno, "start": start, "pocet": pocet}
     adr = (adresa or "").strip()
     if adr:
-        # `sidlo` je AdresaFiltr — z používateľsky zadateľných polí má iba
-        # `textovaAdresa` (fulltext), nie nazevObce/psc.
+        # `sidlo` je AdresaFiltr — z uživatelsky zadatelných polí má jen
+        # `textovaAdresa` (fulltext), ne nazevObce/psc.
         filtr["sidlo"] = {"textovaAdresa": adr}
 
     resp = _call(lambda: _post(f"{ARES_BASE_URL}/vyhledat", filtr))
@@ -350,9 +352,9 @@ def lookup_vr(ico: str) -> SubjektVrResult:
 
 
 def _vr_aktualni(pole: object) -> object:
-    """Z temporálneho VR poľa (list dated záznamov) vráti aktuálny (nevymazaný)
-    prvok — VR nesie identitné polia (`ico`, `obchodniJmeno`, …) ako históriu
-    zmien, nie skalár. Skalár/None vráti nezmenené (robustnosť)."""
+    """Z temporálního VR pole (list dated záznamů) vrátí aktuální (nevymazaný)
+    prvek — VR nese identitní pole (`ico`, `obchodniJmeno`, …) jako historii
+    změn, ne skalár. Skalár/None vrátí nezměněné (robustnost)."""
     if not isinstance(pole, list):
         return pole
     aktualne = [x for x in pole if isinstance(x, dict) and not x.get("datumVymazu")]
@@ -361,7 +363,7 @@ def _vr_aktualni(pole: object) -> object:
 
 
 def _hodnota(x: object) -> str:
-    """`.hodnota` z VR záznamu (alebo skalár/prázdno na string)."""
+    """`.hodnota` z VR záznamu (nebo skalár/prázdno na string)."""
     if isinstance(x, dict):
         return str(x.get("hodnota") or "")
     return str(x) if x is not None else ""
@@ -370,11 +372,11 @@ def _hodnota(x: object) -> str:
 def _reduce_vr(zaznam: dict[str, Any]) -> SubjektVrData:
     """Zredukuje jeden VR záznam na PII-minimalizovaný tvar.
 
-    Filtruje iba **aktuálne** (nevymazané, bez `datumVymazu`) štatutárne orgány,
-    ich členov a predmety podnikania. Z členov nesie iba meno + funkciu — datum
-    narození ani adresu bydliska (`fyzickaOsoba.datumNarozeni`/`.adresa`) NIE.
-    Právnická osoba ako člen sa nesie svojím obchodným menom. Identitné polia
-    (`ico`/`obchodniJmeno`/…) nesie VR ako históriu — berieme aktuálnu hodnotu.
+    Filtruje jen **aktuální** (nevymazané, bez `datumVymazu`) statutární orgány,
+    jejich členy a předměty podnikání. Z členů nese jen jméno + funkci — datum
+    narození ani adresu bydliště (`fyzickaOsoba.datumNarozeni`/`.adresa`) NE.
+    Právnická osoba jako člen se nese svým obchodním jménem. Identitní pole
+    (`ico`/`obchodniJmeno`/…) nese VR jako historii — bereme aktuální hodnotu.
     """
     organy: list[StatutarniClen] = []
     for so in zaznam.get("statutarniOrgany") or []:
@@ -454,15 +456,15 @@ def lookup_rzp(ico: str) -> SubjektRzpResult:
 
 
 def _reduce_rzp(zaznam: dict[str, Any]) -> SubjektRzpData:
-    """Zredukuje RŽP záznam — iba **aktuálne** (nezaniknuté) živnosti a
-    prevádzkarne. Prevádzkarne sú vnorené pod každou živnosťou a naprieč nimi
-    sa opakujú → deduplikácia podľa `icp`. Osoby sa zámerne nenesú (PII)."""
+    """Zredukuje RŽP záznam — jen **aktuální** (nezaniklé) živnosti a
+    provozovny. Provozovny jsou vnořené pod každou živností a napříč nimi
+    se opakují → deduplikace podle `icp`. Osoby se záměrně nenesou (PII)."""
     zivnosti: list[ZivnostItem] = []
     provozovny: dict[Any, ProvozovnaItem] = {}
 
     def _sber_provozoven(zdroj: list[Any]) -> None:
         for p in zdroj or []:
-            if p.get("platnostDo"):  # zrušená prevádzkareň
+            if p.get("platnostDo"):  # zrušená provozovna
                 continue
             icp = p.get("icp")
             key = icp if icp is not None else id(p)
@@ -475,7 +477,7 @@ def _reduce_rzp(zaznam: dict[str, Any]) -> SubjektRzpData:
             )
 
     for zi in zaznam.get("zivnosti") or []:
-        if zi.get("datumZaniku"):  # zaniknutá živnosť
+        if zi.get("datumZaniku"):  # zaniklá živnost
             continue
         predmet = zi.get("predmetPodnikani") or ""
         if predmet:
@@ -583,9 +585,9 @@ def lookup_nrpzs(ico: str) -> SubjektNrpzsResult:
 
 
 def _reduce_nrpzs(zaznamy: list[Any]) -> SubjektNrpzsData:
-    """Zredukuje NRPZS záznamy (jeden na zariadenie/pracovisko) na zoznam
-    zariadení s inštitucionálnymi kontaktmi. `angazovaneOsoby` sa **zámerne
-    zahadzujú** (PII — mená osôb podieľajúcich sa na riadení)."""
+    """Zredukuje NRPZS záznamy (jeden na zařízení/pracoviště) na seznam
+    zařízení s institucionálními kontakty. `angazovaneOsoby` se **záměrně
+    zahazují** (PII — jména osob podílejících se na řízení)."""
     zarizeni: list[ZarizeniNrpzs] = []
     for z in zaznamy[:MAX_ZARIZENI]:
         kontakty = z.get("kontakty") or {}
@@ -630,6 +632,9 @@ def lookup_ciselnik(
             ErrorCode.INVALID_INPUT, "kod_ciselniku je povinný (např. PravniForma)"
         )
 
+    # Stránkování tohoto ARES endpointu je po ČÍSELNÍCÍCH, ne po položkách —
+    # `pocet: 10` tedy znamená „až 10 číselníků", ne 10 řádků. Proto se
+    # položky filtrují a ořezávají (MAX_CISELNIK_POLOZEK) až tu, po odpovědi.
     filtr: dict[str, Any] = {"kodCiselniku": k, "start": 0, "pocet": 10}
     z = (zdroj or "").strip()
     if z:
@@ -659,10 +664,10 @@ def lookup_ciselnik(
                 out.append(CiselnikPolozka(kod=pk, nazev=nazev))
             return out
 
-        # Rovnaký kod číselníka môže existovať vo viacerých zdrojoch (com, res,
-        # rzp, …) s rôznym obsahom — pri aktívnom filtri vyber prvý zdroj, kde
-        # filter niečo našiel (kod 112 je v 'res', ale nie v 'com'); bez filtra
-        # ostáva prvý vrátený.
+        # Stejný kód číselníku může existovat ve více zdrojích (com, res,
+        # rzp, …) s různým obsahem — při aktivním filtru vyber první zdroj, kde
+        # filtr něco našel (kód 112 je v 'res', ale ne v 'com'); bez filtru
+        # zůstává první vrácený.
         c = ciselniky[0]
         polozky = _filtruj(c)
         if (kd or hl) and not polozky:
@@ -710,8 +715,8 @@ def lookup_ciselnik(
 
 
 def _nazev_cs(nazvy: object) -> str:
-    """Z viacjazyčného poľa `nazev` ([{kodJazyka, nazev}]) vyberie český názov,
-    inak prvý dostupný. Skalár/prázdno → prázdny string."""
+    """Z vícejazyčného pole `nazev` ([{kodJazyka, nazev}]) vybere český název,
+    jinak první dostupný. Skalár/prázdno → prázdný string."""
     if not isinstance(nazvy, list):
         return str(nazvy) if nazvy else ""
     prvni = ""

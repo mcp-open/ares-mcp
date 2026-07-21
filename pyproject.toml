@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ares-mcp"
 version = "0.2.1"
-description = "Referenčný no-secret MCP connector nad ARES (R1-WP06)."
+description = "Referenční no-secret MCP connector nad ARES (R1-WP06)."
 requires-python = ">=3.12"
 dependencies = [
   "openmcp-sdk>=0.4,<0.5",
@@ -13,8 +13,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# CI ich doteraz inštalovalo ad hoc v run kroku — deklarované sú overiteľné
-# a `pip install -e .[test]` stačí na lokálne spustenie celej suity.
+# CI je dosud instalovalo ad hoc v run kroku — deklarované jsou ověřitelné
+# a `pip install -e .[test]` stačí na lokální spuštění celé sady.
 test = [
   "pytest==8.4.2",
   "pyyaml==6.0.2",

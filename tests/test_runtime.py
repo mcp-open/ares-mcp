@@ -1,4 +1,4 @@
-"""ARES musí používať zdieľaný SDK runtime, hoci nemá žiadne tajomstvá."""
+"""ARES musí používat sdílený SDK runtime, i když nemá žádná tajemství."""
 
 from pathlib import Path
 
@@ -8,15 +8,15 @@ from connector.server import mcp
 
 
 def test_no_secret_hosted_mode_does_not_require_vault() -> None:
-    """Hosted režim bez `credentials` nesmie vyžadovať Vault.
+    """Hosted režim bez `credentials` nesmí vyžadovat Vault.
 
-    Používa sa **reálna** `mcp` inštancia, nie stub s prázdnym zoznamom
-    nástrojov: od SDK 0.4 `run_connector` overuje zhodu `display.tools` so
-    zaregistrovanými nástrojmi, takže stub by test zhodil právom.
+    Používá se **reálná** `mcp` instance, ne stub s prázdným seznamem
+    nástrojů: od SDK 0.4 `run_connector` ověřuje shodu `display.tools` se
+    zaregistrovanými nástroji, takže stub by test shodil právem.
 
-    Mutácia globálnej `mcp` tu nevadí — všetkých 8 nástrojov je read-only,
-    takže read-only filter nemá čo odregistrovať. Pri konektore so
-    zapisovacími nástrojmi by to muselo bežať v subprocese (robí to
+    Mutace globální `mcp` tu nevadí — všech 8 nástrojů je read-only,
+    takže read-only filtr nemá co odregistrovat. U konektoru se
+    zapisovacími nástroji by to muselo běžet v subprocesu (dělá to
     `ConnectorConformance`).
     """
     manifest = Path(__file__).parents[1] / "connector.yaml"

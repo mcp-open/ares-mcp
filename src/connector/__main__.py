@@ -1,9 +1,9 @@
-"""`python -m connector` — ENTRYPOINT Dockerfilu aj lokálny CLI vstup.
+"""`python -m connector` — ENTRYPOINT Dockerfilu i lokální CLI vstup.
 
-Identický vo všetkých konektoroch. ARES je no-secret (`credentials: []`)
-a nespracúva osobné údaje mimo verejného registra, takže nepredáva ani
-`test_connection`, ani `pii` — musí to sedieť s `capabilities.supports_test`
-a `runtime.pii_salt` v manifeste, inak `run_connector` odmietne naštartovať.
+Identický ve všech konektorech. ARES je no-secret (`credentials: []`)
+a nezpracovává osobní údaje mimo veřejného registru, takže nepředává ani
+`test_connection`, ani `pii` — musí to sedět s `capabilities.supports_test`
+a `runtime.pii_salt` v manifestu, jinak `run_connector` odmítne nastartovat.
 """
 
 from __future__ import annotations

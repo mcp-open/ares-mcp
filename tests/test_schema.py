@@ -1,9 +1,9 @@
-"""Negatívne schema testy pre `connector.server.lookup_subjekt` (R1-WP06 brief,
-úloha „Negative schema testy tests/test_schema.py").
+"""Negativní schema testy pro `connector.server.lookup_subjekt` (R1-WP06 brief,
+úkol „Negative schema testy tests/test_schema.py").
 
-Testujú `lookup_subjekt` priamo (nie cez bežiaci MCP transport) — business
-logika je zámerne oddelená od `@mcp.tool` dekorátora presne kvôli tejto
-testovateľnosti (viď `server.py` docstring `lookup_subjekt`).
+Testují `lookup_subjekt` přímo (ne přes běžící MCP transport) — business
+logika je záměrně oddělená od `@mcp.tool` dekorátoru přesně kvůli této
+testovatelnosti (viz `server.py` docstring `lookup_subjekt`).
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from openmcp_sdk.envelope import ErrorCode
 
 from connector import server
 
-VALID_ICO = "27074358"  # skutočné IČO (Asseco Central Europe, a.s.), platný kontrolní součet
+VALID_ICO = "27074358"  # skutečné IČO (Asseco Central Europe, a.s.), platný kontrolní součet
 
 
 def test_invalid_format_short_ico_neni_volan_upstream(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -23,7 +23,7 @@ def test_invalid_format_short_ico_neni_volan_upstream(monkeypatch: pytest.Monkey
 
     def fake_get(*args: object, **kwargs: object) -> httpx.Response:
         called["n"] += 1
-        raise AssertionError("upstream sa nemal volať pre nevalidný tvar IČO")
+        raise AssertionError("upstream se neměl volat pro neplatný tvar IČO")
 
     monkeypatch.setattr(server.httpx, "get", fake_get)
 
@@ -43,7 +43,7 @@ def test_invalid_checksum_neni_volan_upstream(monkeypatch: pytest.MonkeyPatch) -
 
     def fake_get(*args: object, **kwargs: object) -> httpx.Response:
         called["n"] += 1
-        raise AssertionError("upstream sa nemal volať pre neplatný kontrolný součet")
+        raise AssertionError("upstream se neměl volat pro neplatný kontrolní součet")
 
     monkeypatch.setattr(server.httpx, "get", fake_get)
 
@@ -55,7 +55,7 @@ def test_invalid_checksum_neni_volan_upstream(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_upstream_500_je_upstream_error_bez_retry(monkeypatch: pytest.MonkeyPatch) -> None:
-    """(3) upstream 500 → typed upstream_error, bounded retry=0 (jediné volanie)."""
+    """(3) upstream 500 → typed upstream_error, bounded retry=0 (jediné volání)."""
     calls = []
 
     def fake_get(url: str, timeout: object) -> httpx.Response:
@@ -68,7 +68,7 @@ def test_upstream_500_je_upstream_error_bez_retry(monkeypatch: pytest.MonkeyPatc
         server.lookup_subjekt(VALID_ICO)
 
     assert exc_info.value.code is ErrorCode.UPSTREAM_ERROR
-    assert len(calls) == 1  # bounded retry=0 — presne jedno upstream volanie
+    assert len(calls) == 1  # bounded retry=0 — přesně jedno upstream volání
 
 
 def test_upstream_timeout_je_upstream_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -86,12 +86,12 @@ def test_upstream_timeout_je_upstream_unavailable(monkeypatch: pytest.MonkeyPatc
 
 
 def test_response_nevalidna_proti_schema_je_internal(monkeypatch: pytest.MonkeyPatch) -> None:
-    """(5) response nevalidná proti outputSchema → internal, nikdy nevalidný structuredContent.
+    """(5) response neplatná proti outputSchema → internal, nikdy neplatný structuredContent.
 
     Simuluje ARES odpověď bez povinných polí (`obchodniJmeno`, `sidlo`) —
-    `SubjektData(**payload)` selže na Pydantic validácii a connector to musí
-    zachytiť ako `internal`, nie nechať prejsť surovú `ValidationError` ani
-    vrátiť čiastočne vyplnený/nevalidný výsledok.
+    `SubjektData(**payload)` selže na Pydantic validaci a connector to musí
+    zachytit jako `internal`, nenechat projít syrovou `ValidationError` ani
+    vrátit částečně vyplněný/neplatný výsledek.
     """
 
     def fake_get(url: str, timeout: object) -> httpx.Response:
@@ -106,8 +106,8 @@ def test_response_nevalidna_proti_schema_je_internal(monkeypatch: pytest.MonkeyP
 
 
 def test_non_object_json_body_je_internal(monkeypatch: pytest.MonkeyPatch) -> None:
-    """(C16 bug scan) 200 s ne-objektovým JSON telom (pole/scalar) → internal,
-    nie neošetrený TypeError z `SubjektData(**payload)`."""
+    """(C16 bug scan) 200 s ne-objektovým JSON tělem (pole/scalar) → internal,
+    ne neošetřený TypeError z `SubjektData(**payload)`."""
     for body in (["nope"], "text", 42):
 
         def fake_get(url: str, timeout: object, _b: object = body) -> httpx.Response:
@@ -122,10 +122,10 @@ def test_non_object_json_body_je_internal(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 def test_non_json_body_je_internal(monkeypatch: pytest.MonkeyPatch) -> None:
-    """200 s telom, ktoré nie je JSON (HTML chybovka z proxy) → internal.
+    """200 s tělem, které není JSON (HTML chybovka z proxy) → internal.
 
-    Predtým `_json_dict` nechal `JSONDecodeError` preletieť a zachytila ju až
-    `except (ValueError, ...)` u volajúceho — teda náhodou cez dedičnosť.
+    Předtím `_json_dict` nechal `JSONDecodeError` proletět a zachytila ji až
+    `except (ValueError, ...)` u volajícího — tedy náhodou přes dědičnost.
     """
 
     def fake_get(url: str, timeout: object) -> httpx.Response:
@@ -145,8 +145,8 @@ def test_non_json_body_je_internal(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_valid_ico_checksum_pozitivny_kontrolny_pripad() -> None:
-    """Kontrolný súčet skutočného IČO je platný (pozitívny sanity check pre
-    `ico_checksum` mimo piatich povinných negatívnych prípadov)."""
+    """Kontrolní součet skutečného IČO je platný (pozitivní sanity check pro
+    `ico_checksum` mimo pěti povinných negativních případů)."""
     assert server.ICO_RE.fullmatch(VALID_ICO)
     assert server.ico_checksum(VALID_ICO)
 
@@ -158,7 +158,7 @@ def test_search_kratke_jmeno_neni_volan_upstream(monkeypatch: pytest.MonkeyPatch
     """Jméno < 2 znaky → invalid_input bez POST na upstream."""
 
     def fake_post(*a: object, **k: object) -> httpx.Response:
-        raise AssertionError("upstream sa nemal volať pre krátke jméno")
+        raise AssertionError("upstream se neměl volat pro krátké jméno")
 
     monkeypatch.setattr(server.httpx, "post", fake_post)
     with pytest.raises(server.ConnectorError) as exc:
@@ -171,7 +171,7 @@ def test_search_pocet_mimo_rozsah_neni_volan_upstream(monkeypatch: pytest.Monkey
     monkeypatch.setattr(
         server.httpx,
         "post",
-        lambda *a, **k: (_ for _ in ()).throw(AssertionError("nemal sa volať")),
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("neměl se volat")),
     )
     with pytest.raises(server.ConnectorError) as exc:
         server.search_subjekt("Alza", pocet=server.MAX_POCET + 1)
@@ -247,7 +247,7 @@ def test_vr_invalid_ico_neni_volan_upstream(monkeypatch: pytest.MonkeyPatch) -> 
     """Neplatné IČO → invalid_input bez GET na upstream."""
 
     def fake_get(*a: object, **k: object) -> httpx.Response:
-        raise AssertionError("upstream sa nemal volať pre neplatné IČO")
+        raise AssertionError("upstream se neměl volat pro neplatné IČO")
 
     monkeypatch.setattr(server.httpx, "get", fake_get)
     with pytest.raises(server.ConnectorError) as exc:
@@ -270,7 +270,7 @@ def test_vr_prazdne_zaznamy_je_invalid_input(monkeypatch: pytest.MonkeyPatch) ->
 
 
 _VR_ZAZNAM = {
-    # Identitná polia sú vo VR temporálne histórie, nie skaláry — aktuálna
+    # Identitní pole jsou ve VR temporální historie, ne skaláry — aktuální
     # hodnota je záznam bez `datumVymazu`.
     "ico": [{"datumZapisu": "2003-08-06", "hodnota": VALID_ICO}],
     "obchodniJmeno": [
@@ -321,7 +321,7 @@ def test_vr_reduce_filtruje_a_neuniknou_pii() -> None:
     """`_reduce_vr`: jen aktuální člen + funkce; bývalý člen/orgán a zrušený
     předmět vynechány; datum narození ani adresa NEuniknou do výstupu."""
     data = server._reduce_vr(_VR_ZAZNAM)
-    # aktuálna hodnota z temporálnych polí (nie stará/vymazaná)
+    # aktuální hodnota z temporálních polí (ne stará/vymazaná)
     assert data.ico == VALID_ICO
     assert data.obchodni_jmeno == "Asseco Central Europe, a.s."
     assert data.spisova_znacka == "B 8525"
@@ -357,7 +357,7 @@ def test_rzp_invalid_ico_neni_volan_upstream(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(
         server.httpx,
         "get",
-        lambda *a, **k: (_ for _ in ()).throw(AssertionError("nemal sa volať")),
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("neměl se volat")),
     )
     with pytest.raises(server.ConnectorError) as exc:
         server.lookup_rzp("123")
@@ -433,7 +433,7 @@ def test_res_invalid_ico_neni_volan_upstream(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(
         server.httpx,
         "get",
-        lambda *a, **k: (_ for _ in ()).throw(AssertionError("nemal sa volať")),
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("neměl se volat")),
     )
     with pytest.raises(server.ConnectorError) as exc:
         server.lookup_res("123")
@@ -472,7 +472,7 @@ def test_adresa_kratky_text_neni_volan_upstream(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(
         server.httpx,
         "post",
-        lambda *a, **k: (_ for _ in ()).throw(AssertionError("nemal sa volať")),
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("neměl se volat")),
     )
     with pytest.raises(server.ConnectorError) as exc:
         server.standardizovat_adresu("Pr")
@@ -556,7 +556,7 @@ def test_nrpzs_invalid_ico_neni_volan_upstream(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(
         server.httpx,
         "get",
-        lambda *a, **k: (_ for _ in ()).throw(AssertionError("nemal sa volať")),
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("neměl se volat")),
     )
     with pytest.raises(server.ConnectorError) as exc:
         server.lookup_nrpzs("123")
@@ -621,7 +621,7 @@ def test_ciselnik_prazdny_kod_neni_volan_upstream(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(
         server.httpx,
         "post",
-        lambda *a, **k: (_ for _ in ()).throw(AssertionError("nemal sa volať")),
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("neměl se volat")),
     )
     with pytest.raises(server.ConnectorError) as exc:
         server.lookup_ciselnik("  ")
@@ -722,8 +722,8 @@ def test_ciselnik_orezanie_na_strop_s_warningom(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_ciselnik_filter_prehlada_dalsie_zdroje(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Kód, ktorý v prvom zdroji nie je, sa nájde v ďalšom (com → res) —
-    filter nesmie skončiť na prázdnom prvom číselníku."""
+    """Kód, který v prvním zdroji není, se najde v dalším (com → res) —
+    filtr nesmí skončit na prázdném prvním číselníku."""
     payload = {
         "pocetCelkem": 2,
         "ciselniky": [

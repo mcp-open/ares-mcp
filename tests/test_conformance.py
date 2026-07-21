@@ -1,7 +1,7 @@
-"""Spoločná sada testov zo SDK — kopíruje sa do konektorov 1:1.
+"""Sdílená sada testů ze SDK — kopíruje se do konektorů 1:1.
 
-Nahrádza to, čo bolo doteraz v `test_manifest.py` ručne: zhodu `display.tools`
-so zaregistrovanými nástrojmi, verziu manifest ↔ pyproject a `supports_test`
+Nahrazuje to, co bylo doposud v `test_manifest.py` ručně: shodu `display.tools`
+se zaregistrovanými nástroji, verzi manifest ↔ pyproject a `supports_test`
 wiring.
 """
 
@@ -13,12 +13,12 @@ from openmcp_sdk.testing.conformance import ConnectorConformance
 class TestConformance(ConnectorConformance):
     manifest = "connector.yaml"
     server = "connector.server:mcp"
-    # ARES je no-secret a nemá `test_connection` — `/test` overuje credentials
-    # konkrétneho používateľa a ARES žiadne nemá. Dostupnosť upstreamu je vec
-    # monitoringu platformy, nie tlačidla pri konektore.
+    # ARES je no-secret a nemá `test_connection` — `/test` ověřuje credentials
+    # konkrétního uživatele a ARES žádné nemá. Dostupnost upstreamu je věc
+    # monitoringu platformy, ne tlačítka u konektoru.
     test_connection = None
-    # Osobné údaje sa nepseudonymizujú: mená štatutárov sú verejný údaj registra
-    # a vracajú sa s výslovným upozornením, dátum narodenia a bydlisko sa do LLM
-    # neprenášajú vôbec.
+    # Osobní údaje se nepseudonymizují: jména statutárů jsou veřejný údaj registru
+    # a vracejí se s výslovným upozorněním, datum narození a bydliště se do LLM
+    # nepřenášejí vůbec.
     pii_policy = None
     package = "ares-mcp"

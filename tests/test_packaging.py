@@ -1,7 +1,7 @@
-"""Kontroly, ktoré chytia rozjazd medzi manifestom, kódom a build kontextom.
+"""Kontroly, které zachytí rozjezd mezi manifestem, kódem a build kontextem.
 
-Tento súbor sa kopíruje do konektorov **1:1** — nič v ňom nie je špecifické
-pre šablónu.
+Tento soubor se kopíruje do konektorů **1:1** — nic v něm není specifické
+pro šablonu.
 """
 
 from __future__ import annotations
@@ -24,10 +24,10 @@ def test_version_matches_pyproject():
 
 
 def test_dockerfile_directory_matches_slug():
-    """Build kontext premenováva adresár repozitára na slug.
+    """Build kontext přejmenovává adresář repozitáře na slug.
 
-    Zdedené `COPY template ./template` teda v konektore `zasilkovna` build
-    zhodí — a prejaví sa to až v CI, nie pri písaní kódu.
+    Zděděné `COPY template ./template` tedy v konektoru `zasilkovna` build
+    shodí — a projeví se to až v CI, ne při psaní kódu.
     """
     text = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     copied = {
@@ -42,42 +42,42 @@ def test_dockerfile_directory_matches_slug():
 
 
 def test_dockerfile_runs_as_expected_uid():
-    """UID musí sedieť s `runAsUser: 10001` v podSecurityContext."""
+    """UID musí sedět s `runAsUser: 10001` v podSecurityContext."""
     text = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     assert "USER 10001" in text
     assert "--uid 10001" in text
 
 
 def test_dockerignore_exists_in_repo_root():
-    """V podadresári by sa neuplatnil — build kontext je nadradený priečinok."""
+    """V podadresáři by se neuplatnil — build kontext je nadřazená složka."""
     assert (ROOT / ".dockerignore").is_file()
 
 
 def test_sdk_ref_is_a_commit_sha():
-    """CI checkoutuje SDK na tento ref; bump je jednoriadkový diff v PR."""
+    """CI checkoutuje SDK na tento ref; bump je jednořádkový diff v PR."""
     ref = (ROOT / ".sdk-ref").read_text(encoding="utf-8").strip()
-    assert re.fullmatch(r"[0-9a-f]{40}", ref), f"nevyzerá ako commit SHA: {ref!r}"
+    assert re.fullmatch(r"[0-9a-f]{40}", ref), f"nevypadá jako commit SHA: {ref!r}"
 
 
 def test_scaffold_checklist_is_removed_before_release():
-    """SCAFFOLD.md smie existovať len v samotnej šablóne.
+    """SCAFFOLD.md smí existovat jen v samotné šabloně.
 
-    Keď ostane v scaffoldnutom konektore, znamená to nedokončený scaffold —
-    a s ním typicky aj nezmenené TODO(scaffold) placeholdery.
+    Když zůstane ve scaffoldnutém konektoru, znamená to nedokončený scaffold —
+    a s ním typicky i nezměněné TODO(scaffold) placeholdery.
     """
     if SLUG == "template":
-        pytest.skip("toto JE šablóna")
+        pytest.skip("toto JE šablona")
     assert not (ROOT / "SCAFFOLD.md").exists(), (
-        "SCAFFOLD.md ostal v repozitári — scaffold nie je dokončený"
+        "SCAFFOLD.md zůstal v repozitáři — scaffold není dokončen"
     )
 
 
-#: Rozdelené, aby tento súbor nenašiel sám seba — hľadaný reťazec by inak
-#: bol v ňom a test by hlásil falošný nález.
+#: Rozdělené, aby tento soubor nenašel sám sebe — hledaný řetězec by jinak
+#: byl v něm a test by hlásil falešný nález.
 _PLACEHOLDER = "TODO" + "(scaffold)"
 
-#: Recepty popisujú varianty, ktoré si konektor nemusí vybrať, takže v nich
-#: placeholder ostáva legitímne.
+#: Recepty popisují varianty, které si konektor nemusí vybrat, takže v nich
+#: placeholder zůstává legitimní.
 _PLACEHOLDER_ALLOWED = {"tests/test_packaging.py", "docs/recipes"}
 
 
@@ -98,29 +98,29 @@ def test_no_scaffold_placeholders_left():
             continue
         if _PLACEHOLDER in path.read_text(encoding="utf-8", errors="ignore"):
             offenders.append(rel)
-    assert not offenders, f"nevyplnené placeholdery zo šablóny: {offenders}"
+    assert not offenders, f"nevyplněné placeholdery ze šablony: {offenders}"
 
 
 def test_egress_host_is_not_placeholder():
-    """Placeholder, ktorý ticho prejde, je horší než žiadny."""
+    """Placeholder, který tiše projde, je horší než žádný."""
     if SLUG == "template":
-        pytest.skip("toto JE šablóna")
+        pytest.skip("toto JE šablona")
     assert MANIFEST["egress"]["host"] != "api.example.com", (
-        "egress.host je stále placeholder zo šablóny"
+        "egress.host je stále placeholder ze šablony"
     )
 
 
 def test_pii_connector_has_compliance_doc():
-    """`runtime.pii_salt` ⇒ vyplnená COMPLIANCE.md.
+    """`runtime.pii_salt` ⇒ vyplněná COMPLIANCE.md.
 
-    GDPR záznam podľa čl. 30 nemá kto pripomenúť. Manifest ale vie, že
-    konektor spracúva osobné údaje (pýta si salt), tak si o dokument povie sám.
+    GDPR záznam podle čl. 30 nemá kdo připomenout. Manifest ale ví, že
+    konektor zpracovává osobní údaje (žádá si salt), tak si o dokument řekne sám.
     """
     if not MANIFEST.get("runtime", {}).get("pii_salt"):
-        pytest.skip("konektor nespracúva osobné údaje")
+        pytest.skip("konektor nezpracovává osobní údaje")
     doc = ROOT / "docs" / "COMPLIANCE.md"
-    assert doc.is_file(), "chýba docs/COMPLIANCE.md"
+    assert doc.is_file(), "chybí docs/COMPLIANCE.md"
     text = doc.read_text(encoding="utf-8")
-    assert "čl. 30" in text, "chýba záznam o činnostiach spracovania (čl. 30)"
+    assert "čl. 30" in text, "chybí záznam o činnostech zpracování (čl. 30)"
     if SLUG != "template":
-        assert "TODO" not in text, "COMPLIANCE.md nie je vyplnená"
+        assert "TODO" not in text, "COMPLIANCE.md není vyplněná"
