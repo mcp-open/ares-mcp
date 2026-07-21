@@ -77,6 +77,10 @@ MAX_ZARIZENI = 50
 # pro asistenta smysl; `pocet_celkem` v odpovědi řekne o oříznutí).
 MAX_POCET = 50
 
+# Fixed public fixture for the control-plane readiness test. It is deliberately
+# not configurable and never comes from a customer request.
+PUBLIC_SAFE_TEST_ICO = "00006947"
+
 # Trvalé PII varování k VR výstupu — jména statutárů jsou veřejný údaj rejstříku,
 # ale výslovně označíme, že odpověď obsahuje osobní údaje fyzických osob.
 VR_PII_WARNING = (
@@ -204,6 +208,20 @@ def lookup_subjekt(ico: str) -> SubjektResult:
         ) from e
 
     return SubjektResult(data=data, provenance=_provenance(resp), warnings=[])
+
+
+def public_safe_test() -> None:
+    """Perform one real, bounded ARES lookup and discard all provider data."""
+
+    result = lookup_subjekt(PUBLIC_SAFE_TEST_ICO)
+    if (
+        result.data.ico != PUBLIC_SAFE_TEST_ICO
+        or not result.data.obchodni_jmeno.strip()
+    ):
+        raise ConnectorError(
+            ErrorCode.INTERNAL,
+            "syntetická kontrola ARES nevrátila očekávaný subjekt",
+        )
 
 
 def _aktivni_registrace(seznam: object) -> list[str]:

@@ -490,6 +490,48 @@ def test_lookup_bez_seznamu_registraci_je_registrace_prazdna(
     assert server.lookup_subjekt(VALID_ICO).data.registrace == []
 
 
+def test_public_safe_test_uses_only_fixed_real_lookup_fixture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        return httpx.Response(
+            200,
+            json={
+                "ico": server.PUBLIC_SAFE_TEST_ICO,
+                "obchodniJmeno": "Ministerstvo financí",
+                "sidlo": {"nazevObce": "Praha"},
+            },
+        )
+
+    _install(monkeypatch, handler)
+    assert server.public_safe_test() is None
+    assert calls == [
+        f"https://ares.gov.cz/ekonomicke-subjekty-v-be/rest/ekonomicke-subjekty/{server.PUBLIC_SAFE_TEST_ICO}"
+    ]
+
+
+def test_public_safe_test_fails_if_fixture_identity_does_not_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _fixed(
+        monkeypatch,
+        httpx.Response(
+            200,
+            json={
+                "ico": VALID_ICO,
+                "obchodniJmeno": "Jiný subjekt",
+                "sidlo": {"nazevObce": "Praha"},
+            },
+        ),
+    )
+    with pytest.raises(server.ConnectorError) as exc:
+        server.public_safe_test()
+    assert exc.value.code is ErrorCode.INTERNAL
+
+
 # --- ares_subjekt_nrpzs (zdravotnická zařízení) ----------------------------
 
 

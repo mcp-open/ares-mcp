@@ -10,6 +10,6 @@ from __future__ import annotations
 
 from openmcp_sdk import run_connector
 
-from connector.server import mcp
+from connector.server import mcp, public_safe_test
 
-run_connector("connector.yaml", mcp)
+run_connector("connector.yaml", mcp, public_safe_test=public_safe_test)

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from openmcp_sdk.runtime import run_connector
 
-from connector.server import mcp
+from connector.server import mcp, public_safe_test
 
 
 def test_no_secret_hosted_mode_does_not_require_vault() -> None:
@@ -26,8 +26,10 @@ def test_no_secret_hosted_mode_does_not_require_vault() -> None:
         argv_env={
             "OPENMCP_MODE": "hosted",
             "OPENMCP_INTERNAL_TOKEN": "x" * 32,
+            "OPENMCP_PUBLIC_SAFE_TEST_TOKEN": "p" * 32,
         },
         serve=False,
+        public_safe_test=public_safe_test,
     )
     headers = {"x-openmcp-gateway-token": "x" * 32, "x-openmcp-sub": "u1"}
     assert identity.principal_from_headers(headers).sub == "u1"
