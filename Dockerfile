@@ -26,4 +26,4 @@ WORKDIR /app/ares
 
 EXPOSE 8000
 
-ENTRYPOINT ["python", "-m", "mcp_ares.server"]
+ENTRYPOINT ["python", "-m", "connector"]

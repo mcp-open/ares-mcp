@@ -1,10 +1,45 @@
 # Changelog
 
-Všechny podstatné změny konektoru `mcp-ares`. Formát vychází
+Všechny podstatné změny konektoru `ares-mcp`. Formát vychází
 z [Keep a Changelog](https://keepachangelog.com/cs/1.1.0/), verzování
 respektuje [SemVer](https://semver.org/lang/cs/).
 
 ## [Nevydáno]
+
+### Změněno — migrace na openmcp-sdk 0.4
+
+Vnější plocha konektoru se **nemění**: stejných 8 nástrojů, stejná jména,
+stejná vstupní schémata i popisy. Změny jsou uvnitř.
+
+- **Balík přejmenován `mcp_ares` → `connector`**, entrypoint je nově
+  `python -m connector` (`src/connector/__main__.py`). Ares byl poslední
+  konektor s vlastním jménem balíku; sjednocení znamená, že se šablona
+  a build kontext chovají všude stejně.
+- **Zrušeny wrappery nad business funkcemi.** Každý nástroj existoval dvakrát
+  — business funkce a tenký `@mcp.tool` wrapper — s duplikovaným podpisem
+  i docstringem, takže **test cvičil jiný objekt, než byl zaregistrovaný**.
+  Nově `@tool(mcp, read_only=True, name="ares_…")` přímo na business funkci;
+  dekorátor vrací původní funkci, takže negativní schema testy ji volají dál
+  přímo. Ubylo ~90 řádků.
+- **`logging.setup()` na úrovni importu odstraněn** — od SDK 0.4 ho volá
+  `run_connector` sám. Volání při importu je špatná vrstva: přepsalo by
+  konfiguraci komukoli, kdo si modul jen naimportuje.
+- `sdk_min_version: 0.4.0`, takže startovní kontroly (`display.tools`
+  ↔ registrované nástroje, explicitní `readOnlyHint`, `supports_write`) jsou
+  nově **tvrdé**, ne jen varování.
+- Přidán `tests/test_conformance.py` (sada ze SDK) a `tests/test_packaging.py`.
+  Z `test_manifest.py` zmizely tři testy, které tím byly duplicitní; zůstaly
+  jen ares-specifické invarianty (no-secret tvar, žádný PII salt, egress).
+- `test_runtime.py` používá reálnou `mcp` instanci místo stubu s prázdným
+  seznamem nástrojů — ten by nové kontroly shodily právem.
+- CI sjednoceno se šablonou: ruff, mypy `--strict`, `openmcp-sdk validate`
+  a smoke test image. Kód na to bylo potřeba doladit (chybějící generické
+  parametry u `dict`/`list`, `zip(strict=True)`).
+
+**Nezměněno záměrně:** vlastní HTTP vrstva (`_get`/`_post`/`_call`) zůstává
+místo `openmcp_sdk.http.UpstreamClient`. Ares volá **pět různých base URL**
+a má vědomě `retry=0` s krátkým timeoutem; `UpstreamClient` je stavěný na
+jednu base URL a jeho přínos by tu nevyvážil ztrátu čitelnosti.
 
 ### Opraveno
 

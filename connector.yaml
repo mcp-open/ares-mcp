@@ -8,7 +8,7 @@ summary: >
   z veřejného rejstříku, živnosti a provozovny, statistické údaje RES,
   zdravotnická zařízení NRPZS, standardizace adres podle RÚIAN a překlad
   číselníkových kódů. Veřejné API bez přihlášení — žádné credentials.
-sdk_min_version: 0.2.0
+sdk_min_version: 0.4.0
 
 credentials: []
 user_config: []

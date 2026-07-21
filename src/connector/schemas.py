@@ -9,9 +9,8 @@ kontraktu tohto WP).
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
-
 from openmcp_sdk.envelope import EnvelopeBase
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class Sidlo(BaseModel):
@@ -91,7 +90,7 @@ class StatutarniClen(BaseModel):
     Nesie iba **meno + funkciu + názov orgánu** — meno je verejný údaj
     obchodného registra a je účelom tohto nástroja (kto firmu zastupuje).
     `datumNarozeni`, adresa bydliska a štátne občianstvo, ktoré ARES vracia,
-    sa do LLM **zámerne neprenášajú** (viď `mcp_ares.server._reduce_vr` a
+    sa do LLM **zámerne neprenášajú** (viď `connector.server._reduce_vr` a
     trvalé PII varovanie v `SubjektVrResult.warnings`).
     """
 

@@ -1,0 +1,58 @@
+# Nočný beh testov proti SDK `main` namiesto pinu z `.sdk-ref`.
+#
+# Pin bez kanárika znamená, že sa rozjazd objaví až pri bumpe — vtedy je
+# najväčší a najhoršie sa bisektuje. Zlyhanie tu neblokuje merge, len otvorí
+# issue.
+name: SDK canary
+
+on:
+  schedule: [{ cron: "0 3 * * *" }]
+  workflow_dispatch:
+
+env:
+  SLUG: ares
+
+jobs:
+  canary:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: "${{ env.SLUG }}" }
+      - uses: actions/checkout@v4
+        with:
+          repository: mcp-open/openmcp-sdk
+          token: ${{ secrets.OPENMCP_CI_TOKEN }}
+          ref: main
+          path: sdk
+      - id: run
+        continue-on-error: true
+        run: |
+          docker run --rm -v "$PWD":/src -w /src python:3.13-slim sh -c '
+            set -eu
+            pip install -q --no-cache-dir ./sdk "./'"$SLUG"'[test]"
+            (cd '"$SLUG"' && openmcp-sdk validate connector.yaml)
+            python -m pytest '"$SLUG"'/tests -q
+          '
+      - if: steps.run.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = `SDK canary: ${process.env.SLUG} nie je kompatibilný s openmcp-sdk@main`;
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'sdk-canary',
+            });
+            const body = `Nočný beh proti \`openmcp-sdk@main\` zlyhal.\n\n`
+              + `Beh: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}`
+              + `/actions/runs/${context.runId}`;
+            if (issues.length) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: issues[0].number, body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title, body, labels: ['sdk-canary'],
+              });
+            }

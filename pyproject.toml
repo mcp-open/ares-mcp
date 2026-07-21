@@ -3,12 +3,12 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mcp-ares"
+name = "ares-mcp"
 version = "0.2.1"
 description = "Referenčný no-secret MCP connector nad ARES (R1-WP06)."
 requires-python = ">=3.12"
 dependencies = [
-  "openmcp-sdk>=0.2,<0.3",
+  "openmcp-sdk>=0.4,<0.5",
   "httpx>=0.28,<0.29",
 ]
 
@@ -18,13 +18,27 @@ dependencies = [
 test = [
   "pytest==8.4.2",
   "pyyaml==6.0.2",
+  "anyio>=4,<6",
+  "ruff>=0.6,<1",
+  "mypy>=1.11,<2",
 ]
 
-[project.scripts]
-mcp-ares = "mcp_ares.server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = "src"
+packages = ["connector"]

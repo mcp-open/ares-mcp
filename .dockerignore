@@ -1,0 +1,22 @@
+# Build kontext je nadradený priečinok, takže .dockerignore v podadresári by
+# sa neuplatnil — tento súbor patrí do KOREŇA repozitára konektora a Makefile
+# ho dopĺňa vlastnými `--exclude` pri balení tar-u.
+.git
+.github
+.venv
+venv
+.env
+__pycache__
+*.pyc
+*.egg-info
+build
+dist
+node_modules
+.mypy_cache
+.pytest_cache
+.ruff_cache
+docs
+DOCS.md
+SCAFFOLD.md
+CHANGELOG.md
+README.md

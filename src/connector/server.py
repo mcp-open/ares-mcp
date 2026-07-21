@@ -13,16 +13,16 @@ uvedené nižšie kvôli auditovateľnosti).
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
+from typing import Any
 
 import httpx
 from fastmcp import FastMCP
-from mcp.types import ToolAnnotations
+from openmcp_sdk.envelope import ConnectorError, ErrorCode, Provenance, now_utc_iso
+from openmcp_sdk.tools import tool
 from pydantic import ValidationError
 
-from openmcp_sdk.envelope import ConnectorError, ErrorCode, Provenance, now_utc_iso
-from openmcp_sdk import run_connector
-
-from mcp_ares.schemas import (
+from connector.schemas import (
     AdresaItem,
     AdresaSeznamData,
     AdresaSeznamResult,
@@ -100,7 +100,9 @@ def ico_checksum(ico: str) -> bool:
     Predpokladá, že `ico` už prešlo `ICO_RE.fullmatch` (presne 8 číslic).
     """
     digits = [int(c) for c in ico]
-    total = sum(d * w for d, w in zip(digits[:7], range(8, 1, -1)))
+    # strict=True: obe sekvencie majú presne 7 prvkov, takže tichá nezhoda by
+    # bola chyba vo výpočte kontrolného súčtu, nie legitímny stav.
+    total = sum(d * w for d, w in zip(digits[:7], range(8, 1, -1), strict=True))
     remainder = total % 11
     if remainder in (0, 10):
         check = 1
@@ -116,7 +118,7 @@ def _get(url: str) -> httpx.Response:
     return httpx.get(url, timeout=BOUNDED_TIMEOUT)
 
 
-def _post(url: str, body: dict) -> httpx.Response:
+def _post(url: str, body: dict[str, Any]) -> httpx.Response:
     """Jedno POST upstream volanie (vyhľadávanie) — bounded retry=0."""
     return httpx.post(url, json=body, timeout=BOUNDED_TIMEOUT)
 
@@ -142,7 +144,7 @@ def _raise_for_status(resp: httpx.Response, *, not_found_msg: str) -> None:
         )
 
 
-def _json_dict(resp: httpx.Response) -> dict:
+def _json_dict(resp: httpx.Response) -> dict[str, Any]:
     """`resp.json()` s poistkou na ne-objektové aj nevalidné telo (C16 bug scan).
 
     ARES môže pri chybe/proxy vrátiť 200 s poľom, skalárom alebo rovno HTML
@@ -166,7 +168,7 @@ def _json_dict(resp: httpx.Response) -> dict:
     return payload
 
 
-def _call(do_request) -> httpx.Response:
+def _call(do_request: Callable[[], httpx.Response]) -> httpx.Response:
     """Vykoná jedno upstream volanie a namapuje httpx zlyhania na typované
     `ConnectorError` (timeout/spojenie → upstream_unavailable). Bounded
     retry=0 — `do_request` sa volá práve raz."""
@@ -190,10 +192,35 @@ def _provenance(resp: httpx.Response) -> Provenance:
     )
 
 
+# Logging nastavuje `run_connector` sám (od SDK 0.4) — component odvodí zo
+# slugu v manifeste. Volať `logging.setup()` tu na úrovni importu je zlá
+# vrstva: pri importe modulu v teste alebo nástroji by prepísalo cudziu
+# konfiguráciu.
+
+mcp: FastMCP = FastMCP(
+    "ares",
+    instructions=(
+        "Vyhledávání ekonomických subjektů v českém ARES. Veřejné API, bez přihlášení. "
+        "Nástroje: ares_subjekt_lookup (detail podle IČO; pole 'registrace' říká, ve "
+        "kterých registrech má subjekt aktivní záznam), ares_subjekt_vyhledat "
+        "(hledání podle obchodního jména), ares_subjekt_vr (statutární orgán a předmět "
+        "podnikání z veřejného rejstříku — obsahuje osobní údaje), ares_subjekt_rzp "
+        "(živnosti a provozovny), ares_subjekt_res (NACE a kategorie počtu zaměstnanců), "
+        "ares_subjekt_nrpzs (zdravotnická zařízení a jejich kontakty), "
+        "ares_adresa_standardizovat (standardizace/našeptávač adresy podle RÚIAN), "
+        "ares_ciselnik (překlad kódů z odpovědí — např. PravniForma 112 → název)."
+    ),
+)
+
+
+@tool(mcp, read_only=True, name="ares_subjekt_lookup")
 def lookup_subjekt(ico: str) -> SubjektResult:
-    """Business logika `ares_subjekt_lookup`, oddelená od MCP dekorátora, aby
-    ju negatívne schema testy (`tests/test_schema.py`) vedeli volať priamo bez
-    bežiaceho MCP transportu."""
+    """Vyhledá ekonomický subjekt v ARES podle IČO (8 číslic).
+
+    Vrací základní detail (jméno, sídlo, právní forma, DIČ, NACE) a pole
+    `registrace` — seznam registrů s aktivním záznamem (vr → ares_subjekt_vr,
+    rzp → ares_subjekt_rzp, res → ares_subjekt_res, nrpzs → ares_subjekt_nrpzs).
+    """
     if not ICO_RE.fullmatch(ico) or not ico_checksum(ico):
         raise ConnectorError(
             ErrorCode.INVALID_INPUT, "IČO musí mít 8 číslic a platný kontrolní součet"
@@ -228,12 +255,16 @@ def _aktivni_registrace(seznam: object) -> list[str]:
     )
 
 
+@tool(mcp, read_only=True, name="ares_subjekt_vyhledat")
 def search_subjekt(
     obchodni_jmeno: str, adresa: str | None = None, start: int = 0, pocet: int = 10
 ) -> SubjektSeznamResult:
-    """Business logika `ares_subjekt_vyhledat` (oddelená od MCP dekorátora kvôli
-    testom). ARES vyžaduje `obchodniJmeno` ako primárny filter — samotná adresa
-    či právna forma vráti 400, preto je meno povinné a adresa iba spresnenie."""
+    """Najde subjekty podle obchodního jména (když neznáš IČO).
+
+    `obchodni_jmeno` je povinné (min. 2 znaky); `adresa` je volitelné fulltextové
+    upřesnění sídla (např. město). `pocet` 1..50, `start` = offset pro stránkování.
+    Vrací stránku výsledků + `pocet_celkem` (kolik jich ARES našel celkem).
+    """
     jmeno = (obchodni_jmeno or "").strip()
     if len(jmeno) < 2:
         raise ConnectorError(
@@ -246,7 +277,7 @@ def search_subjekt(
     if start < 0:
         raise ConnectorError(ErrorCode.INVALID_INPUT, "start nesmí být záporný")
 
-    filtr: dict = {"obchodniJmeno": jmeno, "start": start, "pocet": pocet}
+    filtr: dict[str, Any] = {"obchodniJmeno": jmeno, "start": start, "pocet": pocet}
     adr = (adresa or "").strip()
     if adr:
         # `sidlo` je AdresaFiltr — z používateľsky zadateľných polí má iba
@@ -284,9 +315,14 @@ def search_subjekt(
     )
 
 
+@tool(mcp, read_only=True, name="ares_subjekt_vr")
 def lookup_vr(ico: str) -> SubjektVrResult:
-    """Business logika `ares_subjekt_vr` — statutární orgán a předmět podnikání
-    z Veřejného rejstříku. PII-minimalizované (viď `_reduce_vr`)."""
+    """Statutární orgán a předmět podnikání subjektu z veřejného (obchodního) rejstříku.
+
+    Vrací aktuální členy statutárního orgánu (jméno + funkce) a předmět podnikání.
+    POZOR: obsahuje jména fyzických osob z veřejného rejstříku (datum narození a
+    adresa bydliště jsou záměrně vynechány).
+    """
     if not ICO_RE.fullmatch(ico) or not ico_checksum(ico):
         raise ConnectorError(
             ErrorCode.INVALID_INPUT, "IČO musí mít 8 číslic a platný kontrolní součet"
@@ -331,7 +367,7 @@ def _hodnota(x: object) -> str:
     return str(x) if x is not None else ""
 
 
-def _reduce_vr(zaznam: dict) -> SubjektVrData:
+def _reduce_vr(zaznam: dict[str, Any]) -> SubjektVrData:
     """Zredukuje jeden VR záznam na PII-minimalizovaný tvar.
 
     Filtruje iba **aktuálne** (nevymazané, bez `datumVymazu`) štatutárne orgány,
@@ -384,9 +420,13 @@ def _reduce_vr(zaznam: dict) -> SubjektVrData:
     )
 
 
+@tool(mcp, read_only=True, name="ares_subjekt_rzp")
 def lookup_rzp(ico: str) -> SubjektRzpResult:
-    """Business logika `ares_subjekt_rzp` — živnosti a provozovny ze
-    Živnostenského rejstříku. Bez PII (osoby se nepřenášejí)."""
+    """Živnosti a provozovny subjektu ze živnostenského rejstříku (podle IČO).
+
+    Vrací aktuální předměty podnikání (živnosti) a aktivní provozovny (název +
+    adresa). Neobsahuje osobní údaje.
+    """
     if not ICO_RE.fullmatch(ico) or not ico_checksum(ico):
         raise ConnectorError(
             ErrorCode.INVALID_INPUT, "IČO musí mít 8 číslic a platný kontrolní součet"
@@ -413,14 +453,14 @@ def lookup_rzp(ico: str) -> SubjektRzpResult:
     return SubjektRzpResult(data=data, provenance=_provenance(resp), warnings=[])
 
 
-def _reduce_rzp(zaznam: dict) -> SubjektRzpData:
+def _reduce_rzp(zaznam: dict[str, Any]) -> SubjektRzpData:
     """Zredukuje RŽP záznam — iba **aktuálne** (nezaniknuté) živnosti a
     prevádzkarne. Prevádzkarne sú vnorené pod každou živnosťou a naprieč nimi
     sa opakujú → deduplikácia podľa `icp`. Osoby sa zámerne nenesú (PII)."""
     zivnosti: list[ZivnostItem] = []
-    provozovny: dict = {}
+    provozovny: dict[Any, ProvozovnaItem] = {}
 
-    def _sber_provozoven(zdroj: list) -> None:
+    def _sber_provozoven(zdroj: list[Any]) -> None:
         for p in zdroj or []:
             if p.get("platnostDo"):  # zrušená prevádzkareň
                 continue
@@ -453,9 +493,12 @@ def _reduce_rzp(zaznam: dict) -> SubjektRzpData:
     )
 
 
+@tool(mcp, read_only=True, name="ares_subjekt_res")
 def lookup_res(ico: str) -> SubjektResResult:
-    """Business logika `ares_subjekt_res` — NACE a kategória počtu zamestnancov
-    z Registra ekonomických subjektov (nad rámec agregovaného lookupu)."""
+    """Statistické údaje subjektu z registru ekonomických subjektů (RES) podle IČO.
+
+    Doplňuje k základnímu detailu klasifikaci NACE a kategorii počtu zaměstnanců.
+    """
     if not ICO_RE.fullmatch(ico) or not ico_checksum(ico):
         raise ConnectorError(
             ErrorCode.INVALID_INPUT, "IČO musí mít 8 číslic a platný kontrolní součet"
@@ -493,10 +536,15 @@ def lookup_res(ico: str) -> SubjektResResult:
     return SubjektResResult(data=data, provenance=_provenance(resp), warnings=[])
 
 
+@tool(mcp, read_only=True, name="ares_subjekt_nrpzs")
 def lookup_nrpzs(ico: str) -> SubjektNrpzsResult:
-    """Business logika `ares_subjekt_nrpzs` — zdravotnícke zariadenia subjektu
-    z Národného registra poskytovateľov zdravotných služieb. Angažované osoby
-    sa nenesú (PII), kontakty sú inštitucionálne."""
+    """Zdravotnická zařízení subjektu z Národního registru poskytovatelů
+    zdravotních služeb (NRPZS) podle IČO.
+
+    Vrací seznam zařízení/pracovišť: název, druh (kód — přeložit přes
+    ares_ciselnik, kod_ciselniku='DruhZarizeni', zdroj='nrpzs'), adresu a
+    institucionální kontakty (telefon, e-mail, web). Neobsahuje osobní údaje.
+    """
     if not ICO_RE.fullmatch(ico) or not ico_checksum(ico):
         raise ConnectorError(
             ErrorCode.INVALID_INPUT, "IČO musí mít 8 číslic a platný kontrolní součet"
@@ -534,7 +582,7 @@ def lookup_nrpzs(ico: str) -> SubjektNrpzsResult:
     return SubjektNrpzsResult(data=data, provenance=_provenance(resp), warnings=warnings)
 
 
-def _reduce_nrpzs(zaznamy: list) -> SubjektNrpzsData:
+def _reduce_nrpzs(zaznamy: list[Any]) -> SubjektNrpzsData:
     """Zredukuje NRPZS záznamy (jeden na zariadenie/pracovisko) na zoznam
     zariadení s inštitucionálnymi kontaktmi. `angazovaneOsoby` sa **zámerne
     zahadzujú** (PII — mená osôb podieľajúcich sa na riadení)."""
@@ -562,23 +610,27 @@ def _reduce_nrpzs(zaznamy: list) -> SubjektNrpzsData:
     )
 
 
+@tool(mcp, read_only=True, name="ares_ciselnik")
 def lookup_ciselnik(
     kod_ciselniku: str,
     zdroj: str | None = None,
     hledat: str | None = None,
     kod: str | None = None,
 ) -> CiselnikResult:
-    """Business logika `ares_ciselnik` — preklad kódov na názvy. Stránkovanie
-    ARES endpointu je po číselníkoch (nie položkách), preto sa položky filtrujú
-    a orezávajú až tu (`kod` presná zhoda, `hledat` substring bez diakritiky
-    nerozlišuje veľkosť, strop MAX_CISELNIK_POLOZEK)."""
+    """Přeloží číselníkové kódy z ARES odpovědí na názvy (např. PravniForma
+    kód 112 → „Společnost s ručením omezeným").
+
+    `kod_ciselniku` je např. PravniForma, DruhZarizeni, TypSubjektu;
+    `zdroj` upřesní oblast (res, com, vr, rzp, nrpzs, …), `kod` vrátí jedinou
+    položku, `hledat` filtruje názvy podřetězcem. Bez filtru max 50 položek.
+    """
     k = (kod_ciselniku or "").strip()
     if not k:
         raise ConnectorError(
             ErrorCode.INVALID_INPUT, "kod_ciselniku je povinný (např. PravniForma)"
         )
 
-    filtr: dict = {"kodCiselniku": k, "start": 0, "pocet": 10}
+    filtr: dict[str, Any] = {"kodCiselniku": k, "start": 0, "pocet": 10}
     z = (zdroj or "").strip()
     if z:
         filtr["zdrojCiselniku"] = z
@@ -595,7 +647,7 @@ def lookup_ciselnik(
         hl = (hledat or "").strip().lower()
         kd = (kod or "").strip()
 
-        def _filtruj(c: dict) -> list[CiselnikPolozka]:
+        def _filtruj(c: dict[str, Any]) -> list[CiselnikPolozka]:
             out: list[CiselnikPolozka] = []
             for p in c.get("polozkyCiselniku") or []:
                 pk = str(p.get("kod") or "")
@@ -674,9 +726,14 @@ def _nazev_cs(nazvy: object) -> str:
     return prvni
 
 
+@tool(mcp, read_only=True, name="ares_adresa_standardizovat")
 def standardizovat_adresu(text: str, pocet: int = 5) -> AdresaSeznamResult:
-    """Business logika `ares_adresa_standardizovat` — RÚIAN standardizace/
-    našeptávač adresy podle volného textu."""
+    """Standardizuje adresu podle RÚIAN (našeptávač) — z volného textu vrátí
+    strukturované adresy.
+
+    `text` min. 3 znaky; `pocet` 1..20. Užitečné pro ověření/normalizaci adresy
+    před vyhledáváním subjektu.
+    """
     t = (text or "").strip()
     if len(t) < 3:
         raise ConnectorError(ErrorCode.INVALID_INPUT, "adresa musí mít alespoň 3 znaky")
@@ -715,131 +772,3 @@ def standardizovat_adresu(text: str, pocet: int = 5) -> AdresaSeznamResult:
         provenance=_provenance(resp),
         warnings=warnings,
     )
-
-
-# Štruktúrované JSON logovanie (openmcp_sdk) — centrálny collector (Vector) ho
-# rozbalí do poľa .app rovnako ako slog logy api/gateway. Component z env
-# OPENMCP_COMPONENT (default mcp-ares); OPENMCP_LOG_FORMAT=text pre lokálny dev.
-import os as _os  # noqa: E402
-from openmcp_sdk.logging import setup as _log_setup  # noqa: E402
-
-_log_setup(component=_os.getenv("OPENMCP_COMPONENT", "mcp-ares"))
-
-mcp: FastMCP = FastMCP(
-    "ares",
-    instructions=(
-        "Vyhledávání ekonomických subjektů v českém ARES. Veřejné API, bez přihlášení. "
-        "Nástroje: ares_subjekt_lookup (detail podle IČO; pole 'registrace' říká, ve "
-        "kterých registrech má subjekt aktivní záznam), ares_subjekt_vyhledat "
-        "(hledání podle obchodního jména), ares_subjekt_vr (statutární orgán a předmět "
-        "podnikání z veřejného rejstříku — obsahuje osobní údaje), ares_subjekt_rzp "
-        "(živnosti a provozovny), ares_subjekt_res (NACE a kategorie počtu zaměstnanců), "
-        "ares_subjekt_nrpzs (zdravotnická zařízení a jejich kontakty), "
-        "ares_adresa_standardizovat (standardizace/našeptávač adresy podle RÚIAN), "
-        "ares_ciselnik (překlad kódů z odpovědí — např. PravniForma 112 → název)."
-    ),
-)
-
-
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
-def ares_subjekt_lookup(ico: str) -> SubjektResult:
-    """Vyhledá ekonomický subjekt v ARES podle IČO (8 číslic).
-
-    Vrací základní detail (jméno, sídlo, právní forma, DIČ, NACE) a pole
-    `registrace` — seznam registrů s aktivním záznamem (vr → ares_subjekt_vr,
-    rzp → ares_subjekt_rzp, res → ares_subjekt_res, nrpzs → ares_subjekt_nrpzs).
-    """
-    return lookup_subjekt(ico)
-
-
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
-def ares_subjekt_vyhledat(
-    obchodni_jmeno: str, adresa: str | None = None, start: int = 0, pocet: int = 10
-) -> SubjektSeznamResult:
-    """Najde subjekty podle obchodního jména (když neznáš IČO).
-
-    `obchodni_jmeno` je povinné (min. 2 znaky); `adresa` je volitelné fulltextové
-    upřesnění sídla (např. město). `pocet` 1..50, `start` = offset pro stránkování.
-    Vrací stránku výsledků + `pocet_celkem` (kolik jich ARES našel celkem).
-    """
-    return search_subjekt(obchodni_jmeno, adresa=adresa, start=start, pocet=pocet)
-
-
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
-def ares_subjekt_vr(ico: str) -> SubjektVrResult:
-    """Statutární orgán a předmět podnikání subjektu z veřejného (obchodního) rejstříku.
-
-    Vrací aktuální členy statutárního orgánu (jméno + funkce) a předmět podnikání.
-    POZOR: obsahuje jména fyzických osob z veřejného rejstříku (datum narození a
-    adresa bydliště jsou záměrně vynechány).
-    """
-    return lookup_vr(ico)
-
-
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
-def ares_subjekt_rzp(ico: str) -> SubjektRzpResult:
-    """Živnosti a provozovny subjektu ze živnostenského rejstříku (podle IČO).
-
-    Vrací aktuální předměty podnikání (živnosti) a aktivní provozovny (název +
-    adresa). Neobsahuje osobní údaje.
-    """
-    return lookup_rzp(ico)
-
-
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
-def ares_subjekt_res(ico: str) -> SubjektResResult:
-    """Statistické údaje subjektu z registru ekonomických subjektů (RES) podle IČO.
-
-    Doplňuje k základnímu detailu klasifikaci NACE a kategorii počtu zaměstnanců.
-    """
-    return lookup_res(ico)
-
-
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
-def ares_subjekt_nrpzs(ico: str) -> SubjektNrpzsResult:
-    """Zdravotnická zařízení subjektu z Národního registru poskytovatelů
-    zdravotních služeb (NRPZS) podle IČO.
-
-    Vrací seznam zařízení/pracovišť: název, druh (kód — přeložit přes
-    ares_ciselnik, kod_ciselniku='DruhZarizeni', zdroj='nrpzs'), adresu a
-    institucionální kontakty (telefon, e-mail, web). Neobsahuje osobní údaje.
-    """
-    return lookup_nrpzs(ico)
-
-
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
-def ares_ciselnik(
-    kod_ciselniku: str,
-    zdroj: str | None = None,
-    hledat: str | None = None,
-    kod: str | None = None,
-) -> CiselnikResult:
-    """Přeloží číselníkové kódy z ARES odpovědí na názvy (např. PravniForma
-    kód 112 → „Společnost s ručením omezeným").
-
-    `kod_ciselniku` je např. PravniForma, DruhZarizeni, TypSubjektu;
-    `zdroj` upřesní oblast (res, com, vr, rzp, nrpzs, …), `kod` vrátí jedinou
-    položku, `hledat` filtruje názvy podřetězcem. Bez filtru max 50 položek.
-    """
-    return lookup_ciselnik(kod_ciselniku, zdroj=zdroj, hledat=hledat, kod=kod)
-
-
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
-def ares_adresa_standardizovat(text: str, pocet: int = 5) -> AdresaSeznamResult:
-    """Standardizuje adresu podle RÚIAN (našeptávač) — z volného textu vrátí
-    strukturované adresy.
-
-    `text` min. 3 znaky; `pocet` 1..20. Užitečné pro ověření/normalizaci adresy
-    před vyhledáváním subjektu.
-    """
-    return standardizovat_adresu(text, pocet=pocet)
-
-
-def main() -> None:
-    # SDK vyberá local-stdio, hosted alebo self-hosted podľa OPENMCP_MODE.
-    # ARES je no-secret, preto hosted/self-hosted nepotrebujú Vault.
-    run_connector("connector.yaml", mcp)
-
-
-if __name__ == "__main__":
-    main()
