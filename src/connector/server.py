@@ -13,12 +13,12 @@ uvedené níže kvůli auditovatelnosti).
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
 from typing import Any
 
 import httpx
 from fastmcp import FastMCP
 from openmcp_sdk.envelope import ConnectorError, ErrorCode, Provenance, now_utc_iso
+from openmcp_sdk.http import RetryPolicy, UpstreamClient
 from openmcp_sdk.tools import tool
 from pydantic import ValidationError
 
@@ -50,16 +50,16 @@ from connector.schemas import (
 )
 
 _ARES_REST = "https://ares.gov.cz/ekonomicke-subjekty-v-be/rest"
-ARES_BASE_URL = f"{_ARES_REST}/ekonomicke-subjekty"
+ARES_BASE_URL = "/ekonomicke-subjekty"
 # Samostatné registry — nesou data, která agregovaný `ekonomicke-subjekty/{ico}`
 # neobsahuje: VR (statutární orgán, předmět podnikání), RŽP (živnosti,
 # provozovny), RES (NACE, kategorie počtu zaměstnanců).
-ARES_VR_BASE_URL = f"{_ARES_REST}/ekonomicke-subjekty-vr"
-ARES_RZP_BASE_URL = f"{_ARES_REST}/ekonomicke-subjekty-rzp"
-ARES_RES_BASE_URL = f"{_ARES_REST}/ekonomicke-subjekty-res"
-ARES_NRPZS_BASE_URL = f"{_ARES_REST}/ekonomicke-subjekty-nrpzs"
-ARES_ADRESY_URL = f"{_ARES_REST}/standardizovane-adresy/vyhledat"
-ARES_CISELNIKY_URL = f"{_ARES_REST}/ciselniky-nazevniky/vyhledat"
+ARES_VR_BASE_URL = "/ekonomicke-subjekty-vr"
+ARES_RZP_BASE_URL = "/ekonomicke-subjekty-rzp"
+ARES_RES_BASE_URL = "/ekonomicke-subjekty-res"
+ARES_NRPZS_BASE_URL = "/ekonomicke-subjekty-nrpzs"
+ARES_ADRESY_URL = "/standardizovane-adresy/vyhledat"
+ARES_CISELNIKY_URL = "/ciselniky-nazevniky/vyhledat"
 
 # `typStandardizaceAdresy` je povinný atribut filtru standardizace; ARES dovolí
 # jen UPLNA_STANDARDIZACE | VYHOVUJICI_ADRESY — bereme úplnou standardizaci.
@@ -88,10 +88,16 @@ VR_PII_WARNING = (
 # prvních 7 číslic). Bez tvarové shody se upstream vůbec nevolá (J1 krok 3).
 ICO_RE = re.compile(r"^\d{8}$")
 
-# Krátký, ohraničený timeout — connector je interní bezstavový workload nad
-# externím veřejným API, ne dlouhoběžící proces (koncept: "bezpečnost není
-# demokratická", ale ohraničenost čekání je hygiena, ne bezpečnostní otázka).
-BOUNDED_TIMEOUT = httpx.Timeout(5.0, connect=3.0)
+# Krátký, ohraničený timeout a bez retry — connector je interní bezstavový
+# workload nad externím veřejným API, ne dlouhoběžící proces. `max_attempts=1`
+# platí i pro GET (SDK default by na čtení zkoušel READ_RETRY) — ARES je
+# veřejné API bez SLA a čekání na backoff nemá pro interaktivní dotaz smysl.
+_client = UpstreamClient(
+    base_url=_ARES_REST,
+    timeout=5.0,
+    connect_timeout=3.0,
+    retry=RetryPolicy(max_attempts=1),
+)
 
 
 def ico_checksum(ico: str) -> bool:
@@ -113,73 +119,33 @@ def ico_checksum(ico: str) -> bool:
     return check == digits[7]
 
 
-def _get(url: str) -> httpx.Response:
-    """Jedno GET upstream volání — žádný automatický retry (bounded retry=0)."""
-    return httpx.get(url, timeout=BOUNDED_TIMEOUT)
+def _fetch(
+    method: str, path: str, *, not_found_msg: str, body: dict[str, Any] | None = None
+) -> tuple[dict[str, Any], httpx.Response]:
+    """Upstream volání přes sdílený `_client` — retry, timeout a obecné mapování
+    HTTP stavů (401/403/429/5xx) dělá `openmcp_sdk.http`.
 
-
-def _post(url: str, body: dict[str, Any]) -> httpx.Response:
-    """Jedno POST upstream volání (vyhledávání) — bounded retry=0."""
-    return httpx.post(url, json=body, timeout=BOUNDED_TIMEOUT)
-
-
-def _raise_for_status(resp: httpx.Response, *, not_found_msg: str) -> None:
-    """Společné mapování HTTP statusů na typované `ConnectorError`.
-
-    Shodné pro všechny tři nástroje: 429→rate_limited, 404→invalid_input
-    (`not_found_msg`), jiné 4xx→invalid_input (např. ARES odmítne neplatný
-    filtr při vyhledávání), 5xx→upstream_error. 2xx/3xx projde bez chyby.
-    """
-    if resp.status_code == 429:
-        raise ConnectorError(ErrorCode.RATE_LIMITED, "ARES vrátil 429 Too Many Requests")
-    if resp.status_code == 404:
-        raise ConnectorError(ErrorCode.INVALID_INPUT, not_found_msg)
-    if 400 <= resp.status_code < 500:
-        raise ConnectorError(
-            ErrorCode.INVALID_INPUT, f"ARES odmítl dotaz (HTTP {resp.status_code})"
-        )
-    if resp.status_code >= 500:
-        raise ConnectorError(
-            ErrorCode.UPSTREAM_ERROR, f"ARES vrátil chybu HTTP {resp.status_code}"
-        )
-
-
-def _json_dict(resp: httpx.Response) -> dict[str, Any]:
-    """`resp.json()` s pojistkou na ne-objektové i nevalidní tělo (C16 bug scan).
-
-    ARES může při chybě/proxy vrátit 200 s polem, skalárem nebo rovnou HTML
-    chybovou stránkou. Obojí je `internal`, ne neošetřený `TypeError` na
-    `Model(**payload)` resp. `JSONDecodeError`.
-
-    `JSONDecodeError` sice dědí z `ValueError`, takže by ji volající zachytili
-    i bez tohoto bloku — ale jen náhodou přes dědičnost. Kontrakt „vrať dict
-    nebo ConnectorError" má plnit tato funkce sama.
+    Co zůstává doménové a obecný klient to neumí: **konkrétní 404 zpráva**
+    (`not_found_msg`, jiná pro každý registr) a vrácení `httpx.Response`, aby
+    `_provenance` mohla použít skutečnou volanou URL.
     """
     try:
+        resp = _client.request(method, path, json=body)
+    except ConnectorError as exc:
+        if exc.status == 404:
+            raise ConnectorError(ErrorCode.INVALID_INPUT, not_found_msg) from exc
+        raise
+    try:
         payload = resp.json()
-    except ValueError as e:
+    except ValueError as exc:
         raise ConnectorError(
             ErrorCode.INTERNAL, "ARES vrátil odpověď, která není platný JSON"
-        ) from e
+        ) from exc
     if not isinstance(payload, dict):
         raise ConnectorError(
             ErrorCode.INTERNAL, "ARES vrátil neočekávaný tvar odpovědi (není objekt)"
         )
-    return payload
-
-
-def _call(do_request: Callable[[], httpx.Response]) -> httpx.Response:
-    """Vykoná jedno upstream volání a namapuje httpx selhání na typované
-    `ConnectorError` (timeout/spojení → upstream_unavailable). Bounded
-    retry=0 — `do_request` se volá právě jednou."""
-    try:
-        return do_request()
-    except httpx.TimeoutException as e:
-        raise ConnectorError(
-            ErrorCode.UPSTREAM_UNAVAILABLE, f"ARES neodpověděl v časovém limitu: {e}"
-        ) from e
-    except httpx.HTTPError as e:
-        raise ConnectorError(ErrorCode.UPSTREAM_UNAVAILABLE, f"ARES je nedostupný: {e}") from e
+    return payload, resp
 
 
 def _provenance(resp: httpx.Response) -> Provenance:
@@ -226,10 +192,9 @@ def lookup_subjekt(ico: str) -> SubjektResult:
             ErrorCode.INVALID_INPUT, "IČO musí mít 8 číslic a platný kontrolní součet"
         )
 
-    resp = _call(lambda: _get(f"{ARES_BASE_URL}/{ico}"))
-    _raise_for_status(resp, not_found_msg=f"IČO {ico} nebylo v ARES nalezeno")
-
-    payload = _json_dict(resp)
+    payload, resp = _fetch(
+        "GET", f"{ARES_BASE_URL}/{ico}", not_found_msg=f"IČO {ico} nebylo v ARES nalezeno"
+    )
     try:
         data = SubjektData(**payload)
         data.registrace = _aktivni_registrace(payload.get("seznamRegistraci"))
@@ -286,10 +251,12 @@ def search_subjekt(
         # `textovaAdresa` (fulltext), ne nazevObce/psc.
         filtr["sidlo"] = {"textovaAdresa": adr}
 
-    resp = _call(lambda: _post(f"{ARES_BASE_URL}/vyhledat", filtr))
-    _raise_for_status(resp, not_found_msg="ARES vyhledávání nevrátilo výsledek")
-
-    payload = _json_dict(resp)
+    payload, resp = _fetch(
+        "POST",
+        f"{ARES_BASE_URL}/vyhledat",
+        body=filtr,
+        not_found_msg="ARES vyhledávání nevrátilo výsledek",
+    )
     try:
         celkem = int(payload.get("pocetCelkem", 0))
         items = payload.get("ekonomickeSubjekty") or []
@@ -330,10 +297,11 @@ def lookup_vr(ico: str) -> SubjektVrResult:
             ErrorCode.INVALID_INPUT, "IČO musí mít 8 číslic a platný kontrolní součet"
         )
 
-    resp = _call(lambda: _get(f"{ARES_VR_BASE_URL}/{ico}"))
-    _raise_for_status(resp, not_found_msg=f"IČO {ico} není ve veřejném rejstříku")
-
-    payload = _json_dict(resp)
+    payload, resp = _fetch(
+        "GET",
+        f"{ARES_VR_BASE_URL}/{ico}",
+        not_found_msg=f"IČO {ico} není ve veřejném rejstříku",
+    )
     try:
         zaznamy = payload.get("zaznamy") or []
         if not zaznamy:
@@ -434,10 +402,11 @@ def lookup_rzp(ico: str) -> SubjektRzpResult:
             ErrorCode.INVALID_INPUT, "IČO musí mít 8 číslic a platný kontrolní součet"
         )
 
-    resp = _call(lambda: _get(f"{ARES_RZP_BASE_URL}/{ico}"))
-    _raise_for_status(resp, not_found_msg=f"IČO {ico} není v živnostenském rejstříku")
-
-    payload = _json_dict(resp)
+    payload, resp = _fetch(
+        "GET",
+        f"{ARES_RZP_BASE_URL}/{ico}",
+        not_found_msg=f"IČO {ico} není v živnostenském rejstříku",
+    )
     try:
         zaznamy = payload.get("zaznamy") or []
         if not zaznamy:
@@ -506,10 +475,11 @@ def lookup_res(ico: str) -> SubjektResResult:
             ErrorCode.INVALID_INPUT, "IČO musí mít 8 číslic a platný kontrolní součet"
         )
 
-    resp = _call(lambda: _get(f"{ARES_RES_BASE_URL}/{ico}"))
-    _raise_for_status(resp, not_found_msg=f"IČO {ico} není v registru ekonomických subjektů")
-
-    payload = _json_dict(resp)
+    payload, resp = _fetch(
+        "GET",
+        f"{ARES_RES_BASE_URL}/{ico}",
+        not_found_msg=f"IČO {ico} není v registru ekonomických subjektů",
+    )
     try:
         zaznamy = payload.get("zaznamy") or []
         if not zaznamy:
@@ -552,16 +522,14 @@ def lookup_nrpzs(ico: str) -> SubjektNrpzsResult:
             ErrorCode.INVALID_INPUT, "IČO musí mít 8 číslic a platný kontrolní součet"
         )
 
-    resp = _call(lambda: _get(f"{ARES_NRPZS_BASE_URL}/{ico}"))
-    _raise_for_status(
-        resp,
+    payload, resp = _fetch(
+        "GET",
+        f"{ARES_NRPZS_BASE_URL}/{ico}",
         not_found_msg=(
             f"IČO {ico} není v NRPZS (subjekt není registrovaným "
             "poskytovatelem zdravotních služeb)"
         ),
     )
-
-    payload = _json_dict(resp)
     try:
         zaznamy = payload.get("zaznamy") or []
         if not zaznamy:
@@ -640,10 +608,9 @@ def lookup_ciselnik(
     if z:
         filtr["zdrojCiselniku"] = z
 
-    resp = _call(lambda: _post(ARES_CISELNIKY_URL, filtr))
-    _raise_for_status(resp, not_found_msg=f"číselník {k} nebyl nalezen")
-
-    payload = _json_dict(resp)
+    payload, resp = _fetch(
+        "POST", ARES_CISELNIKY_URL, body=filtr, not_found_msg=f"číselník {k} nebyl nalezen"
+    )
     try:
         ciselniky = payload.get("ciselniky") or []
         if not ciselniky:
@@ -753,10 +720,9 @@ def standardizovat_adresu(text: str, pocet: int = 5) -> AdresaSeznamResult:
         "start": 0,
         "pocet": pocet,
     }
-    resp = _call(lambda: _post(ARES_ADRESY_URL, filtr))
-    _raise_for_status(resp, not_found_msg="ARES standardizace nevrátila výsledek")
-
-    payload = _json_dict(resp)
+    payload, resp = _fetch(
+        "POST", ARES_ADRESY_URL, body=filtr, not_found_msg="ARES standardizace nevrátila výsledek"
+    )
     try:
         celkem = int(payload.get("pocetCelkem", 0))
         items = payload.get("standardizovaneAdresy") or []

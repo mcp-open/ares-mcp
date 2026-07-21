@@ -4,34 +4,63 @@
 Testují `lookup_subjekt` přímo (ne přes běžící MCP transport) — business
 logika je záměrně oddělená od `@mcp.tool` dekorátoru přesně kvůli této
 testovatelnosti (viz `server.py` docstring `lookup_subjekt`).
+
+HTTP se od migrace na `openmcp_sdk.http.UpstreamClient` nemockuje přes
+`httpx.get`/`httpx.post` (server už tyto funkce nevolá), ale přes injektovaný
+`transport` — přesně k tomu `UpstreamClient` tuhle možnost má.
 """
 
 from __future__ import annotations
 
+import json as _json
+
 import httpx
 import pytest
 from openmcp_sdk.envelope import ErrorCode
+from openmcp_sdk.http import RetryPolicy, UpstreamClient
 
 from connector import server
 
 VALID_ICO = "27074358"  # skutečné IČO (Asseco Central Europe, a.s.), platný kontrolní součet
 
 
+def _install(monkeypatch: pytest.MonkeyPatch, handler: object) -> None:
+    """Nahraď sdílený `server._client` klientem s mock transportem.
+
+    `handler(request: httpx.Request) -> httpx.Response` — stejný kontrakt jako
+    `httpx.MockTransport`. Retry politika kopíruje produkční nastavení
+    (`RetryPolicy(max_attempts=1)`), aby testy „bez retry" zůstaly platné.
+    """
+    monkeypatch.setattr(
+        server,
+        "_client",
+        UpstreamClient(
+            base_url=server._ARES_REST,
+            transport=httpx.MockTransport(handler),
+            retry=RetryPolicy(max_attempts=1),
+        ),
+    )
+
+
+def _forbidden(monkeypatch: pytest.MonkeyPatch, message: str = "upstream se neměl volat") -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(message)
+
+    _install(monkeypatch, handler)
+
+
+def _fixed(monkeypatch: pytest.MonkeyPatch, response: httpx.Response) -> None:
+    _install(monkeypatch, lambda request: response)
+
+
 def test_invalid_format_short_ico_neni_volan_upstream(monkeypatch: pytest.MonkeyPatch) -> None:
     """(1) ico='123' → invalid_input bez upstream callu."""
-    called = {"n": 0}
-
-    def fake_get(*args: object, **kwargs: object) -> httpx.Response:
-        called["n"] += 1
-        raise AssertionError("upstream se neměl volat pro neplatný tvar IČO")
-
-    monkeypatch.setattr(server.httpx, "get", fake_get)
+    _forbidden(monkeypatch, "upstream se neměl volat pro neplatný tvar IČO")
 
     with pytest.raises(server.ConnectorError) as exc_info:
         server.lookup_subjekt("123")
 
     assert exc_info.value.code is ErrorCode.INVALID_INPUT
-    assert called["n"] == 0
 
 
 def test_invalid_checksum_neni_volan_upstream(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -39,30 +68,23 @@ def test_invalid_checksum_neni_volan_upstream(monkeypatch: pytest.MonkeyPatch) -
     assert server.ICO_RE.fullmatch("12345678")
     assert not server.ico_checksum("12345678")
 
-    called = {"n": 0}
-
-    def fake_get(*args: object, **kwargs: object) -> httpx.Response:
-        called["n"] += 1
-        raise AssertionError("upstream se neměl volat pro neplatný kontrolní součet")
-
-    monkeypatch.setattr(server.httpx, "get", fake_get)
+    _forbidden(monkeypatch, "upstream se neměl volat pro neplatný kontrolní součet")
 
     with pytest.raises(server.ConnectorError) as exc_info:
         server.lookup_subjekt("12345678")
 
     assert exc_info.value.code is ErrorCode.INVALID_INPUT
-    assert called["n"] == 0
 
 
 def test_upstream_500_je_upstream_error_bez_retry(monkeypatch: pytest.MonkeyPatch) -> None:
     """(3) upstream 500 → typed upstream_error, bounded retry=0 (jediné volání)."""
-    calls = []
+    calls: list[str] = []
 
-    def fake_get(url: str, timeout: object) -> httpx.Response:
-        calls.append(url)
-        return httpx.Response(500, request=httpx.Request("GET", url), text="internal error")
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        return httpx.Response(500, text="internal error")
 
-    monkeypatch.setattr(server.httpx, "get", fake_get)
+    _install(monkeypatch, handler)
 
     with pytest.raises(server.ConnectorError) as exc_info:
         server.lookup_subjekt(VALID_ICO)
@@ -74,10 +96,10 @@ def test_upstream_500_je_upstream_error_bez_retry(monkeypatch: pytest.MonkeyPatc
 def test_upstream_timeout_je_upstream_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     """(4) upstream timeout → upstream_unavailable."""
 
-    def fake_get(url: str, timeout: object) -> httpx.Response:
+    def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.TimeoutException("connect timeout")
 
-    monkeypatch.setattr(server.httpx, "get", fake_get)
+    _install(monkeypatch, handler)
 
     with pytest.raises(server.ConnectorError) as exc_info:
         server.lookup_subjekt(VALID_ICO)
@@ -93,11 +115,7 @@ def test_response_nevalidna_proti_schema_je_internal(monkeypatch: pytest.MonkeyP
     zachytit jako `internal`, nenechat projít syrovou `ValidationError` ani
     vrátit částečně vyplněný/neplatný výsledek.
     """
-
-    def fake_get(url: str, timeout: object) -> httpx.Response:
-        return httpx.Response(200, request=httpx.Request("GET", url), json={"ico": VALID_ICO})
-
-    monkeypatch.setattr(server.httpx, "get", fake_get)
+    _fixed(monkeypatch, httpx.Response(200, json={"ico": VALID_ICO}))
 
     with pytest.raises(server.ConnectorError) as exc_info:
         server.lookup_subjekt(VALID_ICO)
@@ -109,11 +127,7 @@ def test_non_object_json_body_je_internal(monkeypatch: pytest.MonkeyPatch) -> No
     """(C16 bug scan) 200 s ne-objektovým JSON tělem (pole/scalar) → internal,
     ne neošetřený TypeError z `SubjektData(**payload)`."""
     for body in (["nope"], "text", 42):
-
-        def fake_get(url: str, timeout: object, _b: object = body) -> httpx.Response:
-            return httpx.Response(200, request=httpx.Request("GET", url), json=_b)
-
-        monkeypatch.setattr(server.httpx, "get", fake_get)
+        _fixed(monkeypatch, httpx.Response(200, json=body))
 
         with pytest.raises(server.ConnectorError) as exc_info:
             server.lookup_subjekt(VALID_ICO)
@@ -127,16 +141,14 @@ def test_non_json_body_je_internal(monkeypatch: pytest.MonkeyPatch) -> None:
     Předtím `_json_dict` nechal `JSONDecodeError` proletět a zachytila ji až
     `except (ValueError, ...)` u volajícího — tedy náhodou přes dědičnost.
     """
-
-    def fake_get(url: str, timeout: object) -> httpx.Response:
-        return httpx.Response(
+    _fixed(
+        monkeypatch,
+        httpx.Response(
             200,
-            request=httpx.Request("GET", url),
             content=b"<html><body>502 Bad Gateway</body></html>",
             headers={"content-type": "text/html"},
-        )
-
-    monkeypatch.setattr(server.httpx, "get", fake_get)
+        ),
+    )
 
     with pytest.raises(server.ConnectorError) as exc_info:
         server.lookup_subjekt(VALID_ICO)
@@ -156,11 +168,7 @@ def test_valid_ico_checksum_pozitivny_kontrolny_pripad() -> None:
 
 def test_search_kratke_jmeno_neni_volan_upstream(monkeypatch: pytest.MonkeyPatch) -> None:
     """Jméno < 2 znaky → invalid_input bez POST na upstream."""
-
-    def fake_post(*a: object, **k: object) -> httpx.Response:
-        raise AssertionError("upstream se neměl volat pro krátké jméno")
-
-    monkeypatch.setattr(server.httpx, "post", fake_post)
+    _forbidden(monkeypatch, "upstream se neměl volat pro krátké jméno")
     with pytest.raises(server.ConnectorError) as exc:
         server.search_subjekt("A")
     assert exc.value.code is ErrorCode.INVALID_INPUT
@@ -168,11 +176,7 @@ def test_search_kratke_jmeno_neni_volan_upstream(monkeypatch: pytest.MonkeyPatch
 
 def test_search_pocet_mimo_rozsah_neni_volan_upstream(monkeypatch: pytest.MonkeyPatch) -> None:
     """pocet mimo 1..MAX_POCET → invalid_input bez upstreamu."""
-    monkeypatch.setattr(
-        server.httpx,
-        "post",
-        lambda *a, **k: (_ for _ in ()).throw(AssertionError("neměl se volat")),
-    )
+    _forbidden(monkeypatch, "neměl se volat")
     with pytest.raises(server.ConnectorError) as exc:
         server.search_subjekt("Alza", pocet=server.MAX_POCET + 1)
     assert exc.value.code is ErrorCode.INVALID_INPUT
@@ -199,11 +203,11 @@ def test_search_happy_path_mapuje_polozky_a_warning(monkeypatch: pytest.MonkeyPa
         ],
     }
 
-    def fake_post(url: str, json: dict, timeout: object) -> httpx.Response:
-        assert json["obchodniJmeno"] == "Asseco"
-        return httpx.Response(200, request=httpx.Request("POST", url), json=payload)
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert _json.loads(request.content)["obchodniJmeno"] == "Asseco"
+        return httpx.Response(200, json=payload)
 
-    monkeypatch.setattr(server.httpx, "post", fake_post)
+    _install(monkeypatch, handler)
     res = server.search_subjekt("Asseco", pocet=2)
     assert res.data.pocet_celkem == 3
     assert [s.ico for s in res.data.subjekty] == ["27074358", None]
@@ -212,15 +216,7 @@ def test_search_happy_path_mapuje_polozky_a_warning(monkeypatch: pytest.MonkeyPa
 
 def test_search_prazdny_vysledek_warning_ne_chyba(monkeypatch: pytest.MonkeyPatch) -> None:
     """0 výsledků → validní envelope s prázdným seznamem + warning (ne chyba)."""
-    monkeypatch.setattr(
-        server.httpx,
-        "post",
-        lambda url, json, timeout: httpx.Response(
-            200,
-            request=httpx.Request("POST", url),
-            json={"pocetCelkem": 0, "ekonomickeSubjekty": []},
-        ),
-    )
+    _fixed(monkeypatch, httpx.Response(200, json={"pocetCelkem": 0, "ekonomickeSubjekty": []}))
     res = server.search_subjekt("Neexistujici Firma XYZ")
     assert res.data.subjekty == []
     assert res.warnings and "Žádný" in res.warnings[0]
@@ -228,13 +224,7 @@ def test_search_prazdny_vysledek_warning_ne_chyba(monkeypatch: pytest.MonkeyPatc
 
 def test_search_400_je_invalid_input(monkeypatch: pytest.MonkeyPatch) -> None:
     """ARES 400 (neplatný filtr) → invalid_input."""
-    monkeypatch.setattr(
-        server.httpx,
-        "post",
-        lambda url, json, timeout: httpx.Response(
-            400, request=httpx.Request("POST", url), text="bad"
-        ),
-    )
+    _fixed(monkeypatch, httpx.Response(400, text="bad"))
     with pytest.raises(server.ConnectorError) as exc:
         server.search_subjekt("Alza")
     assert exc.value.code is ErrorCode.INVALID_INPUT
@@ -245,11 +235,7 @@ def test_search_400_je_invalid_input(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_vr_invalid_ico_neni_volan_upstream(monkeypatch: pytest.MonkeyPatch) -> None:
     """Neplatné IČO → invalid_input bez GET na upstream."""
-
-    def fake_get(*a: object, **k: object) -> httpx.Response:
-        raise AssertionError("upstream se neměl volat pro neplatné IČO")
-
-    monkeypatch.setattr(server.httpx, "get", fake_get)
+    _forbidden(monkeypatch, "upstream se neměl volat pro neplatné IČO")
     with pytest.raises(server.ConnectorError) as exc:
         server.lookup_vr("123")
     assert exc.value.code is ErrorCode.INVALID_INPUT
@@ -257,13 +243,7 @@ def test_vr_invalid_ico_neni_volan_upstream(monkeypatch: pytest.MonkeyPatch) -> 
 
 def test_vr_prazdne_zaznamy_je_invalid_input(monkeypatch: pytest.MonkeyPatch) -> None:
     """Subjekt bez záznamu ve VR (např. OSVČ) → invalid_input, ne internal."""
-    monkeypatch.setattr(
-        server.httpx,
-        "get",
-        lambda url, timeout: httpx.Response(
-            200, request=httpx.Request("GET", url), json={"icoId": VALID_ICO, "zaznamy": []}
-        ),
-    )
+    _fixed(monkeypatch, httpx.Response(200, json={"icoId": VALID_ICO, "zaznamy": []}))
     with pytest.raises(server.ConnectorError) as exc:
         server.lookup_vr(VALID_ICO)
     assert exc.value.code is ErrorCode.INVALID_INPUT
@@ -336,15 +316,7 @@ def test_vr_reduce_filtruje_a_neuniknou_pii() -> None:
 
 def test_vr_happy_path_nese_pii_warning(monkeypatch: pytest.MonkeyPatch) -> None:
     """Kompletní VR volání vrací PII warning ve `warnings`."""
-    monkeypatch.setattr(
-        server.httpx,
-        "get",
-        lambda url, timeout: httpx.Response(
-            200,
-            request=httpx.Request("GET", url),
-            json={"icoId": VALID_ICO, "zaznamy": [_VR_ZAZNAM]},
-        ),
-    )
+    _fixed(monkeypatch, httpx.Response(200, json={"icoId": VALID_ICO, "zaznamy": [_VR_ZAZNAM]}))
     res = server.lookup_vr(VALID_ICO)
     assert res.data.ico == VALID_ICO
     assert server.VR_PII_WARNING in res.warnings
@@ -354,11 +326,7 @@ def test_vr_happy_path_nese_pii_warning(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_rzp_invalid_ico_neni_volan_upstream(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        server.httpx,
-        "get",
-        lambda *a, **k: (_ for _ in ()).throw(AssertionError("neměl se volat")),
-    )
+    _forbidden(monkeypatch, "neměl se volat")
     with pytest.raises(server.ConnectorError) as exc:
         server.lookup_rzp("123")
     assert exc.value.code is ErrorCode.INVALID_INPUT
@@ -414,13 +382,7 @@ def test_rzp_reduce_filtruje_a_deduplikuje() -> None:
 
 
 def test_rzp_prazdne_zaznamy_je_invalid_input(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        server.httpx,
-        "get",
-        lambda url, timeout: httpx.Response(
-            200, request=httpx.Request("GET", url), json={"icoId": VALID_ICO, "zaznamy": []}
-        ),
-    )
+    _fixed(monkeypatch, httpx.Response(200, json={"icoId": VALID_ICO, "zaznamy": []}))
     with pytest.raises(server.ConnectorError) as exc:
         server.lookup_rzp(VALID_ICO)
     assert exc.value.code is ErrorCode.INVALID_INPUT
@@ -430,11 +392,7 @@ def test_rzp_prazdne_zaznamy_je_invalid_input(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_res_invalid_ico_neni_volan_upstream(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        server.httpx,
-        "get",
-        lambda *a, **k: (_ for _ in ()).throw(AssertionError("neměl se volat")),
-    )
+    _forbidden(monkeypatch, "neměl se volat")
     with pytest.raises(server.ConnectorError) as exc:
         server.lookup_res("123")
     assert exc.value.code is ErrorCode.INVALID_INPUT
@@ -452,13 +410,7 @@ def test_res_happy_path_mapuje_nace_a_kategorii(monkeypatch: pytest.MonkeyPatch)
             "institucionalniSektor2010": "11003",
         },
     }
-    monkeypatch.setattr(
-        server.httpx,
-        "get",
-        lambda url, timeout: httpx.Response(
-            200, request=httpx.Request("GET", url), json={"icoId": VALID_ICO, "zaznamy": [zaznam]}
-        ),
-    )
+    _fixed(monkeypatch, httpx.Response(200, json={"icoId": VALID_ICO, "zaznamy": [zaznam]}))
     res = server.lookup_res(VALID_ICO)
     assert res.data.cz_nace == ["62010", "620"]
     assert res.data.kategorie_poctu_pracovniku == "330"
@@ -469,11 +421,7 @@ def test_res_happy_path_mapuje_nace_a_kategorii(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_adresa_kratky_text_neni_volan_upstream(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        server.httpx,
-        "post",
-        lambda *a, **k: (_ for _ in ()).throw(AssertionError("neměl se volat")),
-    )
+    _forbidden(monkeypatch, "neměl se volat")
     with pytest.raises(server.ConnectorError) as exc:
         server.standardizovat_adresu("Pr")
     assert exc.value.code is ErrorCode.INVALID_INPUT
@@ -495,11 +443,12 @@ def test_adresa_happy_path_posle_povinny_typ(monkeypatch: pytest.MonkeyPatch) ->
         ],
     }
 
-    def fake_post(url: str, json: dict, timeout: object) -> httpx.Response:
-        assert json["typStandardizaceAdresy"] == server.ADRESA_TYP_STANDARDIZACE
-        return httpx.Response(200, request=httpx.Request("POST", url), json=payload)
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = _json.loads(request.content)
+        assert body["typStandardizaceAdresy"] == server.ADRESA_TYP_STANDARDIZACE
+        return httpx.Response(200, json=payload)
 
-    monkeypatch.setattr(server.httpx, "post", fake_post)
+    _install(monkeypatch, handler)
     res = server.standardizovat_adresu("Bucharova 2657 Praha", pocet=2)
     assert res.data.pocet_celkem == 1
     assert res.data.adresy[0].nazev_obce == "Praha"
@@ -526,11 +475,7 @@ def test_lookup_odvodi_registrace_a_cz_nace(monkeypatch: pytest.MonkeyPatch) -> 
             "stavZdrojeCeu": "NEEXISTUJICI",
         },
     }
-    monkeypatch.setattr(
-        server.httpx,
-        "get",
-        lambda url, timeout: httpx.Response(200, request=httpx.Request("GET", url), json=payload),
-    )
+    _fixed(monkeypatch, httpx.Response(200, json=payload))
     res = server.lookup_subjekt(VALID_ICO)
     assert res.data.registrace == ["dph", "res", "vr"]
     assert res.data.cz_nace == ["62010", "620"]
@@ -541,11 +486,7 @@ def test_lookup_bez_seznamu_registraci_je_registrace_prazdna(
 ) -> None:
     """Chybějící/ne-dict `seznamRegistraci` → prázdný seznam, ne chyba."""
     payload = {"ico": VALID_ICO, "obchodniJmeno": "X", "sidlo": {}}
-    monkeypatch.setattr(
-        server.httpx,
-        "get",
-        lambda url, timeout: httpx.Response(200, request=httpx.Request("GET", url), json=payload),
-    )
+    _fixed(monkeypatch, httpx.Response(200, json=payload))
     assert server.lookup_subjekt(VALID_ICO).data.registrace == []
 
 
@@ -553,11 +494,7 @@ def test_lookup_bez_seznamu_registraci_je_registrace_prazdna(
 
 
 def test_nrpzs_invalid_ico_neni_volan_upstream(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        server.httpx,
-        "get",
-        lambda *a, **k: (_ for _ in ()).throw(AssertionError("neměl se volat")),
-    )
+    _forbidden(monkeypatch, "neměl se volat")
     with pytest.raises(server.ConnectorError) as exc:
         server.lookup_nrpzs("123")
     assert exc.value.code is ErrorCode.INVALID_INPUT
@@ -602,13 +539,7 @@ def test_nrpzs_reduce_nese_kontakty_a_neuniknou_pii() -> None:
 
 
 def test_nrpzs_prazdne_zaznamy_je_invalid_input(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        server.httpx,
-        "get",
-        lambda url, timeout: httpx.Response(
-            200, request=httpx.Request("GET", url), json={"icoId": VALID_ICO, "zaznamy": []}
-        ),
-    )
+    _fixed(monkeypatch, httpx.Response(200, json={"icoId": VALID_ICO, "zaznamy": []}))
     with pytest.raises(server.ConnectorError) as exc:
         server.lookup_nrpzs(VALID_ICO)
     assert exc.value.code is ErrorCode.INVALID_INPUT
@@ -618,11 +549,7 @@ def test_nrpzs_prazdne_zaznamy_je_invalid_input(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_ciselnik_prazdny_kod_neni_volan_upstream(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        server.httpx,
-        "post",
-        lambda *a, **k: (_ for _ in ()).throw(AssertionError("neměl se volat")),
-    )
+    _forbidden(monkeypatch, "neměl se volat")
     with pytest.raises(server.ConnectorError) as exc:
         server.lookup_ciselnik("  ")
     assert exc.value.code is ErrorCode.INVALID_INPUT
@@ -655,13 +582,7 @@ _CISELNIKY_PAYLOAD = {
 def test_ciselnik_vybere_cesky_nazev_a_warning_o_zdrojich(monkeypatch: pytest.MonkeyPatch) -> None:
     """Preferuje se český název (ne první jazyková mutace); více zdrojů →
     warning s výčtem zdrojů."""
-    monkeypatch.setattr(
-        server.httpx,
-        "post",
-        lambda url, json, timeout: httpx.Response(
-            200, request=httpx.Request("POST", url), json=_CISELNIKY_PAYLOAD
-        ),
-    )
+    _fixed(monkeypatch, httpx.Response(200, json=_CISELNIKY_PAYLOAD))
     res = server.lookup_ciselnik("PravniForma")
     assert res.data.zdroj_ciselniku == "res"
     assert res.data.polozky[0].nazev == "Společnost s ručením omezeným"
@@ -669,26 +590,14 @@ def test_ciselnik_vybere_cesky_nazev_a_warning_o_zdrojich(monkeypatch: pytest.Mo
 
 
 def test_ciselnik_filter_kod_vrati_jedinou_polozku(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        server.httpx,
-        "post",
-        lambda url, json, timeout: httpx.Response(
-            200, request=httpx.Request("POST", url), json=_CISELNIKY_PAYLOAD
-        ),
-    )
+    _fixed(monkeypatch, httpx.Response(200, json=_CISELNIKY_PAYLOAD))
     res = server.lookup_ciselnik("PravniForma", kod="121")
     assert [p.kod for p in res.data.polozky] == ["121"]
     assert res.data.polozky[0].nazev == "Akciová společnost"
 
 
 def test_ciselnik_filter_hledat_substring(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        server.httpx,
-        "post",
-        lambda url, json, timeout: httpx.Response(
-            200, request=httpx.Request("POST", url), json=_CISELNIKY_PAYLOAD
-        ),
-    )
+    _fixed(monkeypatch, httpx.Response(200, json=_CISELNIKY_PAYLOAD))
     res = server.lookup_ciselnik("PravniForma", hledat="akciová")
     assert [p.kod for p in res.data.polozky] == ["121"]
 
@@ -708,13 +617,7 @@ def test_ciselnik_orezanie_na_strop_s_warningom(monkeypatch: pytest.MonkeyPatch)
             }
         ],
     }
-    monkeypatch.setattr(
-        server.httpx,
-        "post",
-        lambda url, json, timeout: httpx.Response(
-            200, request=httpx.Request("POST", url), json=velky
-        ),
-    )
+    _fixed(monkeypatch, httpx.Response(200, json=velky))
     res = server.lookup_ciselnik("PravniForma")
     assert len(res.data.polozky) == server.MAX_CISELNIK_POLOZEK
     assert res.data.pocet_celkem == server.MAX_CISELNIK_POLOZEK + 10
@@ -746,26 +649,14 @@ def test_ciselnik_filter_prehlada_dalsie_zdroje(monkeypatch: pytest.MonkeyPatch)
             },
         ],
     }
-    monkeypatch.setattr(
-        server.httpx,
-        "post",
-        lambda url, json, timeout: httpx.Response(
-            200, request=httpx.Request("POST", url), json=payload
-        ),
-    )
+    _fixed(monkeypatch, httpx.Response(200, json=payload))
     res = server.lookup_ciselnik("PravniForma", kod="112")
     assert res.data.zdroj_ciselniku == "res"
     assert [p.nazev for p in res.data.polozky] == ["Společnost s ručením omezeným"]
 
 
 def test_ciselnik_nenalezen_je_invalid_input(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        server.httpx,
-        "post",
-        lambda url, json, timeout: httpx.Response(
-            200, request=httpx.Request("POST", url), json={"pocetCelkem": 0, "ciselniky": []}
-        ),
-    )
+    _fixed(monkeypatch, httpx.Response(200, json={"pocetCelkem": 0, "ciselniky": []}))
     with pytest.raises(server.ConnectorError) as exc:
         server.lookup_ciselnik("NeexistujiciCiselnik")
     assert exc.value.code is ErrorCode.INVALID_INPUT
