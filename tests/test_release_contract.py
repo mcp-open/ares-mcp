@@ -46,6 +46,10 @@ def test_ci_is_main_only_for_image_mutations() -> None:
     assert "trivy image --scanners vuln,secret" in ci
     assert "SOURCE_DIR: ares-source" in ci
     assert 'path: "${{ env.SOURCE_DIR }}"' in ci
+    assert "Verify self-hosted build interpreter" in ci
+    assert 'python3 "${SOURCE_DIR}/release/materialize_sdk.py"' in ci
+    assert ci.count("actions/setup-python@") == 1
+    assert "${{ github.event_name }}-${{ github.ref }}" in ci
 
 
 def test_workflow_actions_are_commit_pinned() -> None:
