@@ -49,6 +49,7 @@ def test_ci_is_main_only_for_image_mutations() -> None:
     assert "Verify self-hosted build interpreter" in ci
     assert 'python3 "${SOURCE_DIR}/release/materialize_sdk.py"' in ci
     assert ci.count("actions/setup-python@") == 1
+    assert "${{ github.event_name }}-${{ github.ref }}" in ci
 
 
 def test_workflow_actions_are_commit_pinned() -> None:
