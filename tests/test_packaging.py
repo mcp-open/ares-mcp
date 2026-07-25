@@ -111,16 +111,26 @@ def test_egress_host_is_not_placeholder():
 
 
 def test_pii_connector_has_compliance_doc():
-    """`runtime.pii_salt` ⇒ vyplněná COMPLIANCE.md.
+    """PII salt nebo explicitní osobní data ⇒ vyplněná COMPLIANCE.md.
 
-    GDPR záznam podle čl. 30 nemá kdo připomenout. Manifest ale ví, že
-    konektor zpracovává osobní údaje (žádá si salt), tak si o dokument řekne sám.
+    ``runtime.pii_salt`` rozpozná pseudonymizující konektory, ale není úplným
+    klasifikátorem osobních údajů. ARES například záměrně vrací veřejná jména
+    statutárů bez pseudonymizace a tuto skutečnost deklaruje v katalogovém
+    ``display.data_handling``. I takový konektor musí mít compliance záznam.
     """
-    if not MANIFEST.get("runtime", {}).get("pii_salt"):
-        pytest.skip("konektor nezpracovává osobní údaje")
+    data_handling = str(MANIFEST.get("display", {}).get("data_handling", "")).casefold()
+    declares_personal_data = any(
+        marker in data_handling
+        for marker in ("osobní", "jména", "fyzických osob", "pii")
+    )
+    if not MANIFEST.get("runtime", {}).get("pii_salt") and not declares_personal_data:
+        pytest.skip("manifest nedeklaruje pseudonymizaci ani osobní údaje")
     doc = ROOT / "docs" / "COMPLIANCE.md"
     assert doc.is_file(), "chybí docs/COMPLIANCE.md"
     text = doc.read_text(encoding="utf-8")
     assert "čl. 30" in text, "chybí záznam o činnostech zpracování (čl. 30)"
+    assert "veřejného rejstříku" in text
+    assert "datum narození" in text
+    assert "bydliště" in text
     if SLUG != "template":
         assert "TODO" not in text, "COMPLIANCE.md není vyplněná"
