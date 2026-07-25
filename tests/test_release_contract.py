@@ -44,6 +44,8 @@ def test_ci_is_main_only_for_image_mutations() -> None:
     assert "--require-hashes" in ci
     assert "--no-deps --no-build-isolation" in ci
     assert "trivy image --scanners vuln,secret" in ci
+    assert "SOURCE_DIR: ares-source" in ci
+    assert 'path: "${{ env.SOURCE_DIR }}"' in ci
 
 
 def test_workflow_actions_are_commit_pinned() -> None:

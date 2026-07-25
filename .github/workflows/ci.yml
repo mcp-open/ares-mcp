@@ -57,11 +57,13 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: self-hosted
     timeout-minutes: 45
+    env:
+      SOURCE_DIR: ares-source
     outputs: { digest: "${{ steps.digest.outputs.digest }}" }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          path: "${{ env.SLUG }}"
+          path: "${{ env.SOURCE_DIR }}"
           persist-credentials: false
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
@@ -72,10 +74,10 @@ jobs:
         run: |
           build_context="${RUNNER_TEMP}/openmcp-build-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           mkdir -p "$build_context/${SLUG}"
-          git -C "${SLUG}" archive HEAD | tar -x -C "$build_context/${SLUG}"
-          cp "${SLUG}/.dockerignore" "$build_context/.dockerignore"
-          python "${SLUG}/release/materialize_sdk.py" \
-            --root "${SLUG}" --output "$build_context/sdk"
+          git -C "${SOURCE_DIR}" archive HEAD | tar -x -C "$build_context/${SLUG}"
+          cp "${SOURCE_DIR}/.dockerignore" "$build_context/.dockerignore"
+          python "${SOURCE_DIR}/release/materialize_sdk.py" \
+            --root "${SOURCE_DIR}" --output "$build_context/sdk"
           echo "path=$build_context" >> "$GITHUB_OUTPUT"
 
       - name: Build candidate
