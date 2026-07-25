@@ -2,20 +2,22 @@
 # platform/deploy/Makefile (target `build-connector-ares`): tar zabalí
 # ares-mcp + openmcp-sdk z repos/konektory a premenuje ich na `ares/` +
 # `sdk/`, lebo `ares-mcp` závisí na `openmcp-sdk` (lokálny, nie PyPI balík).
-FROM python:3.13-slim
+FROM python:3.13-alpine@sha256:399babc8b49529dabfd9c922f2b5eea81d611e4512e3ed250d75bd2e7683f4b0
 
 WORKDIR /app
 
 # sdk najprv (mcp-ares naň závisí v pyproject.toml).
 COPY sdk ./sdk
 COPY ares ./ares
-RUN pip install --no-cache-dir --no-compile ./sdk ./ares
+RUN pip install --no-cache-dir --no-compile --only-binary=:all: \
+      --require-hashes -r ./ares/release/runtime-requirements.lock \
+    && pip install --no-cache-dir --no-compile --no-deps --no-build-isolation \
+      ./sdk ./ares \
+    && pip check
 
-# Non-root beh — WP05 (restricted PSS baseline, ADR-022 egress mechanizmus)
-# ešte nebežalo v tomto repe (žiadny commit, žiadny 65-networkpolicy.yaml).
-# Toto sú rozumné defaulty analogické 85-gateway.yaml, nie oficiálny WP05
-# baseline — WP05 ich smie nahradiť/zjednotiť naprieč všetkými manifestmi.
-RUN useradd --uid 10001 --system --no-create-home --shell /usr/sbin/nologin openmcp
+# Non-root běh s pevným UID bez domovského adresáře a login shellu.
+RUN addgroup -S -g 10001 openmcp \
+    && adduser -S -D -H -u 10001 -G openmcp -s /sbin/nologin openmcp
 USER 10001
 
 # `python -m connector` volá run_connector("connector.yaml", mcp)

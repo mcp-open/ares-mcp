@@ -1,14 +1,15 @@
-# CI+CD konektoru: test → build → deploy (repository_dispatch `component-built`
-# do mcp-open/platforma, kde CD bumpne digest v manifestu a nasadí).
-#
-# Org secret OPENMCP_CI_TOKEN = fine-grained PAT s contents:read na openmcp-sdk
-# (checkout) a contents:write na platforma (dispatch + bump digestu).
+# CI+CD konektoru: exact source/lock test → immutable image gate → platform
+# dispatch. Feature-branch workflow_dispatch pouze testuje; build a deploy jsou
+# povoleny výhradně pro push do main.
 name: CI
 
 on:
   push: { branches: [main] }
   pull_request: { branches: [main] }
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 env:
   SLUG: ares
@@ -17,80 +18,115 @@ concurrency: { group: "ci-${{ github.repository }}", cancel-in-progress: false }
 
 jobs:
   test:
-    runs-on: self-hosted
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-        with: { path: "${{ env.SLUG }}" }
-
-      # SDK pin žije v souboru .sdk-ref, ne v tomto workflow: bump SDK je potom
-      # jednořádkový diff v PR, který se dá reviewovat, a ten samý ref si
-      # vezme i lokální vývoj.
-      - id: sdkref
-        run: echo "ref=$(tr -d '[:space:]' < "${SLUG}/.sdk-ref")" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          repository: mcp-open/openmcp-sdk
-          token: ${{ secrets.OPENMCP_CI_TOKEN }}
-          ref: ${{ steps.sdkref.outputs.ref }}
-          path: sdk
+          path: "${{ env.SLUG }}"
+          persist-credentials: false
 
-      - name: Lint, typecheck, manifest a testy
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with: { python-version: "3.13.9" }
+
+      - name: Verify and materialize exact SDK source
+        id: sdk
         run: |
-          docker run --rm -v "$PWD":/src -w /src python:3.13-slim sh -c '
-            set -eu
-            pip install -q --no-cache-dir ./sdk "./'"$SLUG"'[test]"
-            ruff check '"$SLUG"'/src '"$SLUG"'/tests
-            mypy '"$SLUG"'/src
-            # Validuje proti SDK schématu I invariantům platformy, takže
-            # "prošlo" znamená "platforma to přijme".
-            (cd '"$SLUG"' && openmcp-sdk validate connector.yaml)
-            python -m pytest '"$SLUG"'/tests -q
-          '
+          sdk_dir="${RUNNER_TEMP}/openmcp-sdk-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          python "${SLUG}/release/materialize_sdk.py" \
+            --root "${SLUG}" --output "$sdk_dir"
+          echo "path=$sdk_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Lint, typecheck, manifest and tests
+        run: |
+          set -eu
+          python -m pip install -q --disable-pip-version-check \
+            --only-binary=:all: --require-hashes \
+            -r "${SLUG}/release/python-requirements.lock"
+          python -m pip install -q --disable-pip-version-check \
+            --no-deps --no-build-isolation \
+            "${{ steps.sdk.outputs.path }}" "./${SLUG}"
+          python -m pip check
+          python -m ruff check "${SLUG}/src" "${SLUG}/tests"
+          python -m mypy "${SLUG}/src"
+          (cd "$SLUG" && openmcp-sdk validate connector.yaml)
+          (cd "$SLUG" && python -m pytest tests -q)
 
   build:
     needs: test
-    if: github.event_name != 'pull_request' # PR se pouze testuje
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: self-hosted
+    timeout-minutes: 45
     outputs: { digest: "${{ steps.digest.outputs.digest }}" }
     steps:
-      - uses: actions/checkout@v4
-        with: { path: "${{ env.SLUG }}" }
-      - id: sdkref
-        run: echo "ref=$(tr -d '[:space:]' < "${SLUG}/.sdk-ref")" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          repository: mcp-open/openmcp-sdk
-          token: ${{ secrets.OPENMCP_CI_TOKEN }}
-          ref: ${{ steps.sdkref.outputs.ref }}
-          path: sdk
+          path: "${{ env.SLUG }}"
+          persist-credentials: false
 
-      - name: Build + push
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with: { python-version: "3.13.9" }
+
+      - name: Prepare isolated build context with exact SDK source
+        id: context
         run: |
+          build_context="${RUNNER_TEMP}/openmcp-build-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "$build_context/${SLUG}"
+          git -C "${SLUG}" archive HEAD | tar -x -C "$build_context/${SLUG}"
+          cp "${SLUG}/.dockerignore" "$build_context/.dockerignore"
+          python "${SLUG}/release/materialize_sdk.py" \
+            --root "${SLUG}" --output "$build_context/sdk"
+          echo "path=$build_context" >> "$GITHUB_OUTPUT"
+
+      - name: Build candidate
+        run: |
+          set -eu
           SHA=${GITHUB_SHA::7}
           IMG=localhost:30500/openmcp/mcp-${SLUG}
-          docker build -q -f "${SLUG}/Dockerfile" -t "$IMG:dev" -t "$IMG:$SHA" .
-          docker push -q "$IMG:$SHA"
-          docker push -q "$IMG:dev"
+          docker build -q \
+            -f "${{ steps.context.outputs.path }}/${SLUG}/Dockerfile" \
+            -t "$IMG:$SHA" "${{ steps.context.outputs.path }}"
 
-      # Kontejner musí opravdu naběhnout. Chytí špatný WORKDIR, chybějící
-      # connector.yaml v image i manifest, který shodí start — tedy přesně to,
-      # co jinak praskne až při rollout-u.
+      - name: Scan candidate
+        run: |
+          set -eu
+          SHA=${GITHUB_SHA::7}
+          IMG=localhost:30500/openmcp/mcp-${SLUG}
+          trivy image --scanners vuln,secret --severity HIGH,CRITICAL \
+            --exit-code 1 "$IMG:$SHA"
+
       - name: Smoke test image
         run: |
+          set -eu
+          SHA=${GITHUB_SHA::7}
+          IMG=localhost:30500/openmcp/mcp-${SLUG}
+          SMOKE="smoke-${SLUG}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          trap 'docker rm -f "$SMOKE" >/dev/null 2>&1 || true' EXIT
           TOKEN=$(head -c 48 /dev/urandom | base64 | tr -d '\n')
-          docker run -d --name "smoke-${SLUG}" -p 18000:8000 \
+          SAFE_TEST_TOKEN=$(head -c 48 /dev/urandom | base64 | tr -d '\n')
+          docker run -d --name "$SMOKE" -p 127.0.0.1::8000 \
             -e OPENMCP_MODE=hosted \
             -e OPENMCP_INTERNAL_TOKEN="$TOKEN" \
+            -e OPENMCP_PUBLIC_SAFE_TEST_TOKEN="$SAFE_TEST_TOKEN" \
             -e OPENMCP_PII_SALT=ci-smoke \
             -e VAULT_ADDR=http://127.0.0.1:8200 \
-            "localhost:30500/openmcp/mcp-${SLUG}:dev"
+            "$IMG:$SHA"
+          PORT=$(docker port "$SMOKE" 8000/tcp | sed 's/.*://')
           for _ in $(seq 30); do
-            curl -sf localhost:18000/healthz && break || sleep 1
+            curl -sf "127.0.0.1:$PORT/healthz" && break || sleep 1
           done
-          curl -sf localhost:18000/healthz || {
-            docker logs "smoke-${SLUG}"; docker rm -f "smoke-${SLUG}"; exit 1;
+          curl -sf "127.0.0.1:$PORT/healthz" || {
+            docker logs "$SMOKE"; exit 1;
           }
-          docker rm -f "smoke-${SLUG}"
+
+      - name: Push verified image
+        run: |
+          set -eu
+          SHA=${GITHUB_SHA::7}
+          IMG=localhost:30500/openmcp/mcp-${SLUG}
+          docker tag "$IMG:$SHA" "$IMG:dev"
+          docker push -q "$IMG:$SHA"
+          docker push -q "$IMG:dev"
 
       - id: digest
         run: |
@@ -102,8 +138,9 @@ jobs:
   deploy:
     needs: build
     runs-on: self-hosted
+    timeout-minutes: 15
     steps:
-      - name: Dispatch deploy do platforma
+      - name: Dispatch deploy to platform
         run: |
           curl -sf -X POST \
             -H "Authorization: token ${{ secrets.OPENMCP_CI_TOKEN }}" \
