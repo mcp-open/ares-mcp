@@ -6,7 +6,7 @@ from pathlib import Path
 from release.materialize_sdk import materialize
 
 ROOT = Path(__file__).resolve().parents[1]
-SDK_REF = "eedc35a7de7ca61c6823d89a5048f9eff98e78ff"
+SDK_REF = "2f041cfa33d4116cf06fb4f26169d16001cf968b"
 PYTHON_IMAGE = (
     "python:3.13-alpine@sha256:"
     "399babc8b49529dabfd9c922f2b5eea81d611e4512e3ed250d75bd2e7683f4b0"
