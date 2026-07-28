@@ -7,8 +7,14 @@ name = "ares-mcp"
 version = "0.2.1"
 description = "Referenční no-secret MCP connector nad ARES (R1-WP06)."
 requires-python = ">=3.12"
+# openmcp-sdk se nepublikuje na PyPI — jméno tam patří nesouvisejícímu
+# projektu, jehož nejvyšší verze je 0.2.20, takže `pip install` na tomhle
+# balíku selhal s „No solution found" a po vydání cizí 0.4.x by dokonce
+# nainstaloval cizí kód. Reference proto míří přímo na commit, který je
+# zároveň v `.sdk-ref` a ve vendorovaném snapshotu v `release/vendor/`;
+# shodu hlídá `tests/test_sdk_pin.py`.
 dependencies = [
-  "openmcp-sdk>=0.4,<0.5",
+  "openmcp-sdk @ git+https://github.com/mcp-open/openmcp-sdk@eedc35a7de7ca61c6823d89a5048f9eff98e78ff",
   "httpx>=0.28,<0.29",
 ]
 
