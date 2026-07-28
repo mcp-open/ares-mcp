@@ -1,0 +1,48 @@
+name: Hlášení chyby
+description: Konektor nedělá to, co má
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Nevkládejte do hlášení skutečné API klíče, tokeny ani osobní údaje
+        zákazníků. Podezření na zranitelnost patří na security@openmcp.cz,
+        ne sem.
+  - type: textarea
+    id: co-se-deje
+    attributes:
+      label: Co se děje
+      description: Co jste čekali a co se stalo místo toho.
+    validations:
+      required: true
+  - type: textarea
+    id: reprodukce
+    attributes:
+      label: Jak to zopakovat
+      description: Který nástroj, s jakými argumenty a co vrátil.
+      render: text
+    validations:
+      required: true
+  - type: dropdown
+    id: rezim
+    attributes:
+      label: Režim běhu
+      options:
+        - local-stdio (vlastní počítač)
+        - hosted (openmcp.cz)
+        - self-hosted
+    validations:
+      required: true
+  - type: input
+    id: verze
+    attributes:
+      label: Verze konektoru
+      description: Hodnota `version` z connector.yaml nebo commit, ze kterého stavíte.
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Chybový výstup
+      description: Zkontrolujte, že v něm nezůstal API klíč ani zákaznická data.
+      render: text

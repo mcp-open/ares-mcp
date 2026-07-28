@@ -115,6 +115,12 @@ IČO se před dotazem ověřuje kontrolní číslicí, takže překlep nespotře
 volání na ARES. Cesty se skládají jen z ověřených segmentů — do URL se nikdy
 nevkládá surový vstup od modelu.
 
+## Přispívání a bezpečnost
+
+- Postup a nároky na změny: [CONTRIBUTING.md](CONTRIBUTING.md)
+- Hlášení zranitelností: [SECURITY.md](SECURITY.md) — nikdy ne přes veřejné issue
+- Historie změn: [CHANGELOG.md](CHANGELOG.md)
+
 ## Licence
 
 MIT — viz [LICENSE](LICENSE).

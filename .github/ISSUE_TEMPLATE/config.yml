@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Bezpečnostní zranitelnost
+    url: https://openmcp.cz/bezpecnost
+    about: Zranitelnosti nikdy nehlaste veřejným issue — pošlete je na security@openmcp.cz.
+  - name: Otázka k platformě OpenMCP
+    url: https://openmcp.cz/podpora
+    about: Dotazy k hostovaným konektorům, účtu nebo aktivacím řeší podpora platformy.
