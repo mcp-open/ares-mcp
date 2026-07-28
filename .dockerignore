@@ -1,0 +1,26 @@
+# Docker čte pouze `.dockerignore` v kořeni nadřazeného build contextu.
+# CI proto tento soubor kopíruje do kořene izolovaného contextu. `**/` varianty
+# pokrývají jak connector podadresář, tak materializovaný SDK podadresář.
+**/.git
+**/.github
+**/.venv
+**/venv
+**/.env
+**/__pycache__
+**/*.pyc
+**/*.egg-info
+**/build
+**/dist
+**/node_modules
+**/.mypy_cache
+**/.pytest_cache
+**/.ruff_cache
+**/tests
+**/docs
+**/release/vendor
+**/release/evidence
+**/release/dist
+**/DOCS.md
+**/SCAFFOLD.md
+**/CHANGELOG.md
+**/README.md

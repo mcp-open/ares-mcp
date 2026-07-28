@@ -1,0 +1,114 @@
+slug: ares
+name: ARES
+version: 0.2.1
+category: registry
+summary: >
+  Vyhledávání v českém ARES — ověření firmy podle IČO (jméno, sídlo, právní
+  forma, DIČ, NACE), fulltext podle obchodního jména, statutární orgán
+  z veřejného rejstříku, živnosti a provozovny, statistické údaje RES,
+  zdravotnická zařízení NRPZS, standardizace adres podle RÚIAN a překlad
+  číselníkových kódů. Veřejné API bez přihlášení — žádné credentials.
+sdk_min_version: 0.4.2
+
+credentials: []
+user_config: []
+operator_config: []
+
+capabilities:
+  default_read_only: true
+  supports_write: false
+  # supports_test záměrně CHYBÍ (default false), na rozdíl od raynetu.
+  # `/test` ověřuje credentials konkrétního uživatele — ARES žádné nemá
+  # (`credentials: []`), takže by mohl testovat jen dostupnost upstreamu.
+  # To je věc monitoringu platformy (SPEC-003 `ops.synthetic`), ne tlačítka
+  # u konektoru. SDK invariant (runtime.py) vyžaduje, aby se toto pole
+  # shodovalo s tím, zda `run_connector` dostane `test_connection` — neměnit
+  # jedno bez druhého.
+
+# display (manifest.display) — kurátorovaný verejný manifest pro web detail
+# (stejný vzor jako raynet-mcp/connector.yaml).
+display:
+  schema_version: 1
+  capabilities:
+    - "Ověřit firmu podle IČO — obchodní jméno, sídlo, právní forma, DIČ, NACE"
+    - "Najít subjekt podle jména; číst veřejný a živnostenský rejstřík"
+    - "Standardizovat adresu podle RÚIAN a překládat číselníkové kódy na názvy"
+  permissions:
+    - "Pouze čtení z veřejného ARES REST API (ares.gov.cz) — konektor nikam nezapisuje"
+    - "Bez přihlášení a bez tajemství (no-secret konektor)"
+  data_handling: "Jména statutárů z veřejného rejstříku jsou veřejný údaj a nástroj ares_subjekt_vr je vrací s výslovným upozorněním; datum narození a bydliště se do LLM nikdy nepřenášejí. Ostatní nástroje osobní údaje nevracejí."
+  example_query: "Ověř mi firmu s IČO 27074358 a řekni, kdo ji zastupuje."
+  # Seznam MCP nástrojů pro web detail (display.tools) — jméno + jednořádkový
+  # popis. Musí odpovídat @mcp.tool dekorátorům v src/connector/server.py.
+  tools:
+    - name: ares_subjekt_lookup
+      description: "Detail subjektu podle IČO — jméno, sídlo, právní forma, DIČ, NACE a aktivní registry"
+    - name: ares_subjekt_vyhledat
+      description: "Hledání subjektů podle obchodního jména (volitelně upřesnění adresou), se stránkováním"
+    - name: ares_subjekt_vr
+      description: "Statutární orgán a předmět podnikání z veřejného rejstříku (jen jméno a funkce, bez data narození a bydliště)"
+    - name: ares_subjekt_rzp
+      description: "Živnosti a provozovny ze živnostenského rejstříku"
+    - name: ares_subjekt_res
+      description: "Statistické údaje z RES — klasifikace NACE a kategorie počtu zaměstnanců"
+    - name: ares_subjekt_nrpzs
+      description: "Zdravotnická zařízení subjektu z NRPZS včetně institucionálních kontaktů"
+    - name: ares_adresa_standardizovat
+      description: "Standardizace/našeptávač adresy podle RÚIAN z volného textu"
+    - name: ares_ciselnik
+      description: "Překlad číselníkových kódů na názvy (např. právní forma 112 → společnost s ručením omezeným)"
+  locales:
+    cs:
+      name: "ARES"
+      description: "Veřejné české registry pro ověření firmy podle IČO, hledání subjektů, statutární údaje, živnosti, klasifikace a standardizaci adres."
+      capabilities:
+        - "Ověřit firmu podle IČO a najít subjekt podle obchodního jména"
+        - "Číst veřejný a živnostenský rejstřík, RES a NRPZS"
+        - "Standardizovat adresy podle RÚIAN a překládat číselníkové kódy"
+      permissions:
+        - "Pouze čtení z veřejného ARES API — konektor nikam nezapisuje"
+        - "Bez přihlášení, API klíče nebo jiného tajemství"
+      data_handling: "Konektor vrací jen veřejné rejstříkové údaje. U statutárů zachová jméno a funkci, ale datum narození ani bydliště do AI klienta nepřenáší."
+      example_query: "Ověř firmu s IČO 27074358 a shrň její právní formu, sídlo a statutární orgán."
+      fields: []
+      tools:
+        - { name: ares_subjekt_lookup, description: "Detail subjektu podle IČO včetně názvu, sídla, právní formy, DIČ a NACE" }
+        - { name: ares_subjekt_vyhledat, description: "Hledání subjektů podle obchodního jména a volitelně adresy" }
+        - { name: ares_subjekt_vr, description: "Statutární orgán a předmět podnikání bez data narození a bydliště" }
+        - { name: ares_subjekt_rzp, description: "Živnosti a provozovny ze živnostenského rejstříku" }
+        - { name: ares_subjekt_res, description: "Klasifikace NACE a kategorie počtu zaměstnanců z RES" }
+        - { name: ares_subjekt_nrpzs, description: "Zdravotnická zařízení subjektu z NRPZS" }
+        - { name: ares_adresa_standardizovat, description: "Standardizace a našeptání adresy podle RÚIAN" }
+        - { name: ares_ciselnik, description: "Překlad číselníkových kódů na srozumitelné názvy" }
+      limitations:
+        - "Data pocházejí z veřejných registrů a konektor je nemůže měnit ani opravovat."
+    sk:
+      name: "ARES"
+      description: "Verejné české registre na overenie firmy podľa IČO, hľadanie subjektov, štatutárne údaje, živnosti, klasifikácie a štandardizáciu adries."
+      capabilities:
+        - "Overiť firmu podľa IČO a nájsť subjekt podľa obchodného mena"
+        - "Čítať verejný a živnostenský register, RES a NRPZS"
+        - "Štandardizovať adresy podľa RÚIAN a prekladať číselníkové kódy"
+      permissions:
+        - "Iba čítanie z verejného ARES API — konektor nikam nezapisuje"
+        - "Bez prihlásenia, API kľúča alebo iného tajomstva"
+      data_handling: "Konektor vracia iba verejné registrové údaje. Pri štatutároch zachová meno a funkciu, ale dátum narodenia ani bydlisko do AI klienta neprenáša."
+      example_query: "Over firmu s IČO 27074358 a zhrň jej právnu formu, sídlo a štatutárny orgán."
+      fields: []
+      tools:
+        - { name: ares_subjekt_lookup, description: "Detail subjektu podľa IČO vrátane názvu, sídla, právnej formy, DIČ a NACE" }
+        - { name: ares_subjekt_vyhledat, description: "Hľadanie subjektov podľa obchodného mena a voliteľne adresy" }
+        - { name: ares_subjekt_vr, description: "Štatutárny orgán a predmet podnikania bez dátumu narodenia a bydliska" }
+        - { name: ares_subjekt_rzp, description: "Živnosti a prevádzky zo živnostenského registra" }
+        - { name: ares_subjekt_res, description: "Klasifikácia NACE a kategória počtu zamestnancov z RES" }
+        - { name: ares_subjekt_nrpzs, description: "Zdravotnícke zariadenia subjektu z NRPZS" }
+        - { name: ares_adresa_standardizovat, description: "Štandardizácia a našepkanie adresy podľa RÚIAN" }
+        - { name: ares_ciselnik, description: "Preklad číselníkových kódov na zrozumiteľné názvy" }
+      limitations:
+        - "Údaje pochádzajú z verejných registrov a konektor ich nemôže meniť ani opravovať."
+
+egress:
+  host: ares.gov.cz
+  port: 443
+  path_prefix: /ekonomicke-subjekty-v-be/rest
+  methods: [GET, POST]

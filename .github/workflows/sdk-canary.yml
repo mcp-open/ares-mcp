@@ -1,0 +1,70 @@
+# Noční kontrola reviewovaného SDK snapshotu. Kompatibilitu s novým SDK main
+# spouští SDK repository před aktualizací snapshotu; tento workflow nepoužívá
+# dlouhodobý cross-repository credential.
+name: SDK snapshot canary
+
+on:
+  schedule: [{ cron: "0 3 * * *" }]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  SLUG: ares
+
+jobs:
+  canary:
+    runs-on: self-hosted
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: "${{ env.SLUG }}"
+          persist-credentials: false
+      - id: run
+        continue-on-error: true
+        run: |
+          sdk_dir="/runner-temp/openmcp-sdk-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker run --rm --user "$(id -u):$(id -g)" \
+            -v "$PWD":/src -v "$RUNNER_TEMP":/runner-temp -w /src \
+            python:3.13-slim@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91 \
+            python "${SLUG}/release/materialize_sdk.py" \
+              --root "${SLUG}" --output "$sdk_dir"
+          docker run --rm -v "$PWD":/src -v "$RUNNER_TEMP":/runner-temp \
+            -e SDK_DIR="$sdk_dir" -w /src \
+            python:3.13-slim@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91 \
+            sh -c '
+            set -eu
+            pip install -q --no-cache-dir --only-binary=:all: \
+              --require-hashes -r "'"$SLUG"'/release/python-requirements.lock"
+            pip install -q --no-cache-dir --no-deps --no-build-isolation \
+              "$SDK_DIR" "./'"$SLUG"'"
+            pip check
+            (cd '"$SLUG"' && openmcp-sdk validate connector.yaml)
+            python -m pytest '"$SLUG"'/tests -q
+          '
+      - if: steps.run.outcome == 'failure'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea
+        with:
+          script: |
+            const title = `SDK snapshot: ${process.env.SLUG} neprošel kontrolou kompatibility`;
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'sdk-canary',
+            });
+            const body = `Noční běh proti reviewovanému SDK snapshotu selhal.\n\n`
+              + `Běh: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}`
+              + `/actions/runs/${context.runId}`;
+            if (issues.length) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: issues[0].number, body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title, body, labels: ['sdk-canary'],
+              });
+            }
