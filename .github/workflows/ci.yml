@@ -1,6 +1,7 @@
 # CI+CD konektoru: exact source/lock test → immutable image gate → platform
-# dispatch. Feature-branch workflow_dispatch pouze testuje; build a deploy jsou
-# povoleny výhradně pro push do main.
+# dispatch s digestem a provenancí zdrojového CI běhu. Feature-branch
+# workflow_dispatch pouze testuje; build a deploy jsou povoleny výhradně pro
+# push do main.
 name: CI
 
 on:
@@ -147,9 +148,21 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Dispatch deploy to platform
+        env:
+          DIGEST: "${{ needs.build.outputs.digest }}"
+          SOURCE_RUN_ID: "${{ github.run_id }}"
+          SOURCE_RUN_ATTEMPT: "${{ github.run_attempt }}"
         run: |
+          set -eu
+          printf '%s' "$SLUG" | grep -Eq '^[a-z0-9][a-z0-9-]*$'
+          printf '%s' "$DIGEST" | grep -Eq '^sha256:[a-f0-9]{64}$'
+          printf '%s' "$SOURCE_RUN_ID" | grep -Eq '^[1-9][0-9]{0,17}$'
+          printf '%s' "$SOURCE_RUN_ATTEMPT" | grep -Eq '^[1-9][0-9]{0,8}$'
+          PAYLOAD=$(printf \
+            '{"event_type":"component-built","client_payload":{"component":"mcp-%s","digest":"%s","source_run_id":"%s","source_run_attempt":"%s"}}' \
+            "$SLUG" "$DIGEST" "$SOURCE_RUN_ID" "$SOURCE_RUN_ATTEMPT")
           curl -sf -X POST \
             -H "Authorization: token ${{ secrets.OPENMCP_CI_TOKEN }}" \
             -H "Accept: application/vnd.github+json" \
             https://api.github.com/repos/mcp-open/platforma/dispatches \
-            -d "{\"event_type\":\"component-built\",\"client_payload\":{\"component\":\"mcp-${SLUG}\",\"digest\":\"${{ needs.build.outputs.digest }}\"}}"
+            --data "$PAYLOAD"
