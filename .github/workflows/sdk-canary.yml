@@ -1,6 +1,14 @@
 # Noční kontrola reviewovaného SDK snapshotu. Kompatibilitu s novým SDK main
 # spouští SDK repository před aktualizací snapshotu; tento workflow nepoužívá
 # dlouhodobý cross-repository credential.
+#
+# Self-hosted runner sdílí workspace mezi běhy. Fixní cesta `ares` zůstala
+# v posledních bězích jako neplatný checkout: `actions/checkout` při přípravě
+# adresáře skončil na `git config --local` s hláškami `--local can only be
+# used inside a git repository` a `not a git repository` (exit 128), ještě
+# před testy. Checkout proto míří do cesty unikátní pro běh (`run_id` +
+# `run_attempt`), kterou žádný předchozí běh nemůže zablokovat, a úklid dělá
+# samostatný job — až po tom, co doběhne „Post" fáze `actions/checkout`.
 name: SDK snapshot canary
 
 on:
@@ -13,6 +21,11 @@ permissions:
 
 env:
   SLUG: ares
+  CHECKOUT_DIR: "sdk-canary-${{ github.run_id }}-${{ github.run_attempt }}"
+
+concurrency:
+  group: "sdk-canary-${{ github.repository }}"
+  cancel-in-progress: false
 
 jobs:
   canary:
@@ -21,29 +34,32 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          path: "${{ env.SLUG }}"
+          path: "${{ env.CHECKOUT_DIR }}"
           persist-credentials: false
       - id: run
         continue-on-error: true
+        working-directory: "${{ env.CHECKOUT_DIR }}"
         run: |
           sdk_dir="/runner-temp/openmcp-sdk-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           docker run --rm --user "$(id -u):$(id -g)" \
             -v "$PWD":/src -v "$RUNNER_TEMP":/runner-temp -w /src \
             python:3.13-slim@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91 \
-            python "${SLUG}/release/materialize_sdk.py" \
-              --root "${SLUG}" --output "$sdk_dir"
+            python release/materialize_sdk.py --root . --output "$sdk_dir"
           docker run --rm -v "$PWD":/src -v "$RUNNER_TEMP":/runner-temp \
-            -e SDK_DIR="$sdk_dir" -w /src \
+            -e SDK_DIR="$sdk_dir" \
+            -e PYTHONDONTWRITEBYTECODE=1 \
+            -e PYTEST_ADDOPTS="-p no:cacheprovider" \
+            -w /src \
             python:3.13-slim@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91 \
             sh -c '
             set -eu
             pip install -q --no-cache-dir --only-binary=:all: \
-              --require-hashes -r "'"$SLUG"'/release/python-requirements.lock"
+              --require-hashes -r release/python-requirements.lock
             pip install -q --no-cache-dir --no-deps --no-build-isolation \
-              "$SDK_DIR" "./'"$SLUG"'"
+              "$SDK_DIR" .
             pip check
-            (cd '"$SLUG"' && openmcp-sdk validate connector.yaml)
-            python -m pytest '"$SLUG"'/tests -q
+            openmcp-sdk validate connector.yaml
+            python -m pytest tests -q
           '
       - if: steps.run.outcome == 'failure'
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea
@@ -68,3 +84,72 @@ jobs:
                 title, body, labels: ['sdk-canary'],
               });
             }
+
+  # Vlastní job, ne `if: always()` krok v canary: úklid smí sáhnout na checkout
+  # až po „Post actions/checkout", který v adresáři ještě pracuje. Maže výhradně
+  # dvě cesty pojmenované tímto během; historického fixního adresáře ani ničeho
+  # jiného ve workspace se nedotkne a rekurzivní mazání shellem nepoužívá.
+  cleanup:
+    needs: canary
+    if: always()
+    runs-on: self-hosted
+    timeout-minutes: 10
+    permissions: {}
+    steps:
+      - name: Remove run-scoped canary paths
+        run: |
+          python3 - <<'PY'
+          import os
+          import pathlib
+          import shutil
+
+          def fail(message: str) -> None:
+              print(f"::error::{message}")
+              raise SystemExit(1)
+
+          run_id = os.environ["GITHUB_RUN_ID"]
+          attempt = os.environ["GITHUB_RUN_ATTEMPT"]
+          if not (run_id.isdigit() and attempt.isdigit()):
+              fail("run identifiers are not numeric")
+
+          expected_checkout = f"sdk-canary-{run_id}-{attempt}"
+          if os.environ["CHECKOUT_DIR"] != expected_checkout:
+              fail(f"CHECKOUT_DIR does not match this run: {expected_checkout!r}")
+
+          workspace = pathlib.Path(os.environ["GITHUB_WORKSPACE"])
+          runner_temp = pathlib.Path(os.environ["RUNNER_TEMP"])
+          for root in (workspace, runner_temp):
+              if not root.is_absolute() or not root.is_dir():
+                  fail(f"cleanup root is not an absolute directory: {root}")
+
+          targets = (
+              (workspace, expected_checkout),
+              (runner_temp, f"openmcp-sdk-{run_id}-{attempt}"),
+          )
+
+          leftovers = []
+          for root, name in targets:
+              target = root / name
+              if target.name != name or target.parent != root:
+                  fail(f"refusing to touch unexpected path: {target}")
+              if target.is_symlink() or target.is_file():
+                  target.unlink()
+                  print(f"unlinked {target}")
+                  continue
+              if not target.exists():
+                  print(f"nothing to remove at {target}")
+                  continue
+              if not target.is_dir():
+                  fail(f"refusing to remove non-regular path: {target}")
+              try:
+                  shutil.rmtree(target)
+              except OSError as error:
+                  # Úklid nesmí ohrozit výsledek canary. Unikátní cesta zajistí,
+                  # že zbytek neblokuje další běh; warning zviditelní únik místa.
+                  leftovers.append(f"{target}: {error.__class__.__name__}: {error}")
+                  continue
+              print(f"removed {target}")
+
+          for leftover in leftovers:
+              print(f"::warning::cleanup left a path behind — {leftover}")
+          PY
