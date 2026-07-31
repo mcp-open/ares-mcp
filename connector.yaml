@@ -1,6 +1,6 @@
 slug: ares
 name: ARES
-version: 0.2.1
+version: 0.2.2
 category: registry
 summary: >
   Vyhledávání v českém ARES — ověření firmy podle IČO (jméno, sídlo, právní
@@ -8,7 +8,9 @@ summary: >
   z veřejného rejstříku, živnosti a provozovny, statistické údaje RES,
   zdravotnická zařízení NRPZS, standardizace adres podle RÚIAN a překlad
   číselníkových kódů. Veřejné API bez přihlášení — žádné credentials.
-sdk_min_version: 0.4.2
+# Zdroj, vendorovaný archiv i .sdk-ref jsou na 0.4.3; nižší deklarace by
+# platformě nepravdivě tvrdila kompatibilitu s předchozím SDK kontraktem.
+sdk_min_version: 0.4.3
 
 credentials: []
 user_config: []
