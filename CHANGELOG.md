@@ -74,6 +74,12 @@ respektuje [SemVer](https://semver.org/lang/cs/).
 
 ### Změněno
 
+- `sdk-canary.yml` používá checkout cestu odvozenou od `run_id` a
+  `run_attempt` a po doběhnutí post-akce checkoutu uklízí jen přesně dvě
+  cesty tohoto běhu. Fixní cesta na self-hosted runneru zůstala jako neplatný
+  checkout a `actions/checkout` končil před testy na `git config --local`
+  (`not a git repository`, exit 128); unikátní cesta další běhy od tohoto
+  stavu izoluje bez širokého mazání workspace.
 - SDK pin bumpnut na `0d36cf1a93c870fe237ecbe3bee7b52b202df18d`
   (openmcp-sdk 0.4.3) ve všech čtyřech místech — `pyproject.toml`, `.sdk-ref`,
   `release/vendor/` a `SDK_REF` v `tests/test_release_contract.py`. Přináší
