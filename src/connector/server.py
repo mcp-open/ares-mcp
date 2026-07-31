@@ -327,15 +327,17 @@ def _fetch(
     """Upstream volání přes sdílený `_client` — retry, timeout a obecné mapování
     HTTP stavů (401/403/429/5xx) dělá `openmcp_sdk.http`.
 
-    Co zůstává doménové a obecný klient to neumí: **konkrétní 404 zpráva**
+    Co zůstává doménové a obecný klient to neumí: **konkrétní 404/410 zpráva**
     (`not_found_msg`, jiná pro každý registr) a vrácení `httpx.Response`, aby
     `_provenance` mohla použít skutečnou volanou URL.
     """
     try:
         resp = _client.request(method, path, json=body)
     except ConnectorError as exc:
-        if exc.status == 404:
-            raise ConnectorError(ErrorCode.INVALID_INPUT, not_found_msg) from exc
+        if exc.status in (404, 410):
+            raise ConnectorError(
+                ErrorCode.NOT_FOUND, not_found_msg, status=exc.status
+            ) from exc
         raise
     try:
         payload = resp.json()
@@ -534,7 +536,7 @@ def lookup_vr(ico: str) -> SubjektVrResult:
         zaznamy = _maps(payload.get("zaznamy"))
         if not zaznamy:
             raise ConnectorError(
-                ErrorCode.INVALID_INPUT, f"IČO {ico} nemá záznam ve veřejném rejstříku"
+                ErrorCode.NOT_FOUND, f"IČO {ico} nemá záznam ve veřejném rejstříku"
             )
         data, orezani = _reduce_vr(zaznamy[0])
     except ConnectorError:
@@ -663,7 +665,7 @@ def lookup_rzp(ico: str) -> SubjektRzpResult:
         zaznamy = _maps(payload.get("zaznamy"))
         if not zaznamy:
             raise ConnectorError(
-                ErrorCode.INVALID_INPUT, f"IČO {ico} nemá záznam v živnostenském rejstříku"
+                ErrorCode.NOT_FOUND, f"IČO {ico} nemá záznam v živnostenském rejstříku"
             )
         data, warnings = _reduce_rzp(zaznamy[0])
     except ConnectorError:
@@ -756,7 +758,7 @@ def lookup_res(ico: str) -> SubjektResResult:
         zaznamy = _maps(payload.get("zaznamy"))
         if not zaznamy:
             raise ConnectorError(
-                ErrorCode.INVALID_INPUT, f"IČO {ico} nemá záznam v RES"
+                ErrorCode.NOT_FOUND, f"IČO {ico} nemá záznam v RES"
             )
         z = zaznamy[0]
         stat = _map(z.get("statistickeUdaje"))
@@ -811,7 +813,7 @@ def lookup_nrpzs(ico: str) -> SubjektNrpzsResult:
         zaznamy = _maps(payload.get("zaznamy"))
         if not zaznamy:
             raise ConnectorError(
-                ErrorCode.INVALID_INPUT, f"IČO {ico} nemá záznam v NRPZS"
+                ErrorCode.NOT_FOUND, f"IČO {ico} nemá záznam v NRPZS"
             )
         data = _reduce_nrpzs(zaznamy)
     except ConnectorError:
@@ -892,7 +894,7 @@ def lookup_ciselnik(
     try:
         ciselniky = _maps(payload.get("ciselniky"))
         if not ciselniky:
-            raise ConnectorError(ErrorCode.INVALID_INPUT, f"číselník {k} nebyl nalezen")
+            raise ConnectorError(ErrorCode.NOT_FOUND, f"číselník {k} nebyl nalezen")
 
         hl = (hledat or "").strip().lower()
         kd = (kod or "").strip()

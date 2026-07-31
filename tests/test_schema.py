@@ -108,6 +108,22 @@ def test_upstream_timeout_je_upstream_unavailable(monkeypatch: pytest.MonkeyPatc
     assert exc_info.value.code is ErrorCode.UPSTREAM_UNAVAILABLE
 
 
+@pytest.mark.parametrize("status", [404, 410])
+def test_upstream_missing_je_not_found_s_domenovou_zpravou(
+    monkeypatch: pytest.MonkeyPatch, status: int
+) -> None:
+    """Platné IČO bez záznamu není chyba argumentu ani únik upstream těla."""
+    _fixed(monkeypatch, httpx.Response(status, text="TAJNY-UPSTREAM-DETAIL"))
+
+    with pytest.raises(server.ConnectorError) as exc_info:
+        server.lookup_subjekt(VALID_ICO)
+
+    assert exc_info.value.code is ErrorCode.NOT_FOUND
+    assert exc_info.value.status == status
+    assert VALID_ICO in exc_info.value.message
+    assert "TAJNY-UPSTREAM-DETAIL" not in exc_info.value.message
+
+
 def test_response_nevalidna_proti_schema_je_internal(monkeypatch: pytest.MonkeyPatch) -> None:
     """(5) response neplatná proti outputSchema → internal, nikdy neplatný structuredContent.
 
@@ -242,12 +258,12 @@ def test_vr_invalid_ico_neni_volan_upstream(monkeypatch: pytest.MonkeyPatch) -> 
     assert exc.value.code is ErrorCode.INVALID_INPUT
 
 
-def test_vr_prazdne_zaznamy_je_invalid_input(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Subjekt bez záznamu ve VR (např. OSVČ) → invalid_input, ne internal."""
+def test_vr_prazdne_zaznamy_je_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Subjekt bez záznamu ve VR (např. OSVČ) → not_found, ne invalid_input."""
     _fixed(monkeypatch, httpx.Response(200, json={"icoId": VALID_ICO, "zaznamy": []}))
     with pytest.raises(server.ConnectorError) as exc:
         server.lookup_vr(VALID_ICO)
-    assert exc.value.code is ErrorCode.INVALID_INPUT
+    assert exc.value.code is ErrorCode.NOT_FOUND
 
 
 _VR_ZAZNAM = {
@@ -384,11 +400,11 @@ def test_rzp_reduce_filtruje_a_deduplikuje() -> None:
     assert warnings == []  # pod stropem se nevaruje
 
 
-def test_rzp_prazdne_zaznamy_je_invalid_input(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_rzp_prazdne_zaznamy_je_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
     _fixed(monkeypatch, httpx.Response(200, json={"icoId": VALID_ICO, "zaznamy": []}))
     with pytest.raises(server.ConnectorError) as exc:
         server.lookup_rzp(VALID_ICO)
-    assert exc.value.code is ErrorCode.INVALID_INPUT
+    assert exc.value.code is ErrorCode.NOT_FOUND
 
 
 # --- ares_subjekt_res (NACE, kategorie počtu zaměstnanců) ------------------
@@ -418,6 +434,13 @@ def test_res_happy_path_mapuje_nace_a_kategorii(monkeypatch: pytest.MonkeyPatch)
     assert res.data.cz_nace == ["62010", "620"]
     assert res.data.kategorie_poctu_pracovniku == "330"
     assert res.data.sidlo is not None and res.data.sidlo.nazev_obce == "Praha"
+
+
+def test_res_prazdne_zaznamy_je_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fixed(monkeypatch, httpx.Response(200, json={"icoId": VALID_ICO, "zaznamy": []}))
+    with pytest.raises(server.ConnectorError) as exc:
+        server.lookup_res(VALID_ICO)
+    assert exc.value.code is ErrorCode.NOT_FOUND
 
 
 # --- ares_adresa_standardizovat -------------------------------------------
@@ -583,11 +606,11 @@ def test_nrpzs_reduce_nese_kontakty_a_neuniknou_pii() -> None:
     assert "ŘEDITEL" not in blob and "1970" not in blob
 
 
-def test_nrpzs_prazdne_zaznamy_je_invalid_input(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_nrpzs_prazdne_zaznamy_je_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
     _fixed(monkeypatch, httpx.Response(200, json={"icoId": VALID_ICO, "zaznamy": []}))
     with pytest.raises(server.ConnectorError) as exc:
         server.lookup_nrpzs(VALID_ICO)
-    assert exc.value.code is ErrorCode.INVALID_INPUT
+    assert exc.value.code is ErrorCode.NOT_FOUND
 
 
 # --- ares_ciselnik (překlad kódů) ------------------------------------------
@@ -700,11 +723,11 @@ def test_ciselnik_filter_prehlada_dalsie_zdroje(monkeypatch: pytest.MonkeyPatch)
     assert [p.nazev for p in res.data.polozky] == ["Společnost s ručením omezeným"]
 
 
-def test_ciselnik_nenalezen_je_invalid_input(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ciselnik_nenalezen_je_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
     _fixed(monkeypatch, httpx.Response(200, json={"pocetCelkem": 0, "ciselniky": []}))
     with pytest.raises(server.ConnectorError) as exc:
         server.lookup_ciselnik("NeexistujiciCiselnik")
-    assert exc.value.code is ErrorCode.INVALID_INPUT
+    assert exc.value.code is ErrorCode.NOT_FOUND
 
 
 # --- Chybová hláška nesmí nést obsah upstream odpovědi ---------------------
