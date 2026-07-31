@@ -8,7 +8,7 @@ import yaml
 from release.materialize_sdk import materialize
 
 ROOT = Path(__file__).resolve().parents[1]
-SDK_REF = "0d36cf1a93c870fe237ecbe3bee7b52b202df18d"
+SDK_REF = "88ecbf8ac0b9a5c53665331322ccfb31b80458ab"
 PYTHON_IMAGE = (
     "python:3.13-alpine@sha256:"
     "399babc8b49529dabfd9c922f2b5eea81d611e4512e3ed250d75bd2e7683f4b0"
