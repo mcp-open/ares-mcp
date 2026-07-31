@@ -97,8 +97,16 @@ jobs:
     permissions: {}
     steps:
       - name: Remove run-scoped canary paths
+        env:
+          RUN_ID: "${{ github.run_id }}"
+          RUN_ATTEMPT: "${{ github.run_attempt }}"
         run: |
-          python3 - <<'PY'
+          set -eu
+          docker run --rm -i \
+            -v "$GITHUB_WORKSPACE":/ws -v "$RUNNER_TEMP":/runner-temp \
+            -e CHECKOUT_DIR -e RUN_ID -e RUN_ATTEMPT -w / \
+            python:3.13-slim@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91 \
+            python - <<'PY'
           import os
           import pathlib
           import shutil
@@ -107,8 +115,8 @@ jobs:
               print(f"::error::{message}")
               raise SystemExit(1)
 
-          run_id = os.environ["GITHUB_RUN_ID"]
-          attempt = os.environ["GITHUB_RUN_ATTEMPT"]
+          run_id = os.environ["RUN_ID"]
+          attempt = os.environ["RUN_ATTEMPT"]
           if not (run_id.isdigit() and attempt.isdigit()):
               fail("run identifiers are not numeric")
 
@@ -116,10 +124,10 @@ jobs:
           if os.environ["CHECKOUT_DIR"] != expected_checkout:
               fail(f"CHECKOUT_DIR does not match this run: {expected_checkout!r}")
 
-          workspace = pathlib.Path(os.environ["GITHUB_WORKSPACE"])
-          runner_temp = pathlib.Path(os.environ["RUNNER_TEMP"])
+          workspace = pathlib.Path("/ws")
+          runner_temp = pathlib.Path("/runner-temp")
           for root in (workspace, runner_temp):
-              if not root.is_absolute() or not root.is_dir():
+              if not root.is_absolute() or root.is_symlink() or not root.is_dir():
                   fail(f"cleanup root is not an absolute directory: {root}")
 
           targets = (
@@ -127,7 +135,6 @@ jobs:
               (runner_temp, f"openmcp-sdk-{run_id}-{attempt}"),
           )
 
-          leftovers = []
           for root, name in targets:
               target = root / name
               if target.name != name or target.parent != root:
@@ -141,15 +148,8 @@ jobs:
                   continue
               if not target.is_dir():
                   fail(f"refusing to remove non-regular path: {target}")
-              try:
-                  shutil.rmtree(target)
-              except OSError as error:
-                  # Úklid nesmí ohrozit výsledek canary. Unikátní cesta zajistí,
-                  # že zbytek neblokuje další běh; warning zviditelní únik místa.
-                  leftovers.append(f"{target}: {error.__class__.__name__}: {error}")
-                  continue
+              shutil.rmtree(target)
+              if os.path.lexists(target):
+                  fail(f"cleanup target still exists: {target}")
               print(f"removed {target}")
-
-          for leftover in leftovers:
-              print(f"::warning::cleanup left a path behind — {leftover}")
           PY

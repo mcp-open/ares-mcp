@@ -110,14 +110,22 @@ def test_sdk_canary_cleanup_is_narrow_and_runs_after_checkout_post() -> None:
     assert cleanup["permissions"] == {}
 
     script = cleanup["steps"][0]["run"]
+    assert "docker run --rm -i" in script
+    assert '-v "$GITHUB_WORKSPACE":/ws' in script
+    assert '-v "$RUNNER_TEMP":/runner-temp' in script
+    assert PYTHON_SLIM_IMAGE in script
     assert 'f"sdk-canary-{run_id}-{attempt}"' in script
     assert 'os.environ["CHECKOUT_DIR"] != expected_checkout' in script
     assert 'f"openmcp-sdk-{run_id}-{attempt}"' in script
     assert "root.is_absolute()" in script
+    assert "root.is_symlink()" in script
     assert "target.parent != root" in script
     assert "target.is_symlink() or target.is_file()" in script
     assert "target.unlink()" in script
     assert script.count("shutil.rmtree(target)") == 1
+    assert "os.path.lexists(target)" in script
+    assert "except OSError" not in script
+    assert "::warning::" not in script
 
     assert "rm -rf" not in text
     assert 'path: "ares"' not in text
