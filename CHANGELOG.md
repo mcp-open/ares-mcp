@@ -79,7 +79,10 @@ respektuje [SemVer](https://semver.org/lang/cs/).
   cesty tohoto běhu. Fixní cesta na self-hosted runneru zůstala jako neplatný
   checkout a `actions/checkout` končil před testy na `git config --local`
   (`not a git repository`, exit 128); unikátní cesta další běhy od tohoto
-  stavu izoluje bez širokého mazání workspace.
+  stavu izoluje bez širokého mazání workspace. Cleanup běží v připnutém
+  kontejneru a při nemožnosti odstranit přesně pojmenovaný cíl selže; hostitelský
+  Python totiž po úspěšném canary nedokázal odstranit jeho `*.egg-info`
+  (`PermissionError`) a pouze zanechal warning.
 - SDK pin bumpnut na `0d36cf1a93c870fe237ecbe3bee7b52b202df18d`
   (openmcp-sdk 0.4.3) ve všech čtyřech místech — `pyproject.toml`, `.sdk-ref`,
   `release/vendor/` a `SDK_REF` v `tests/test_release_contract.py`. Přináší
