@@ -22,7 +22,14 @@ které nejsou nutné pro deklarovaný firemní nebo institucionální účel.
 - Uložení konektorem: žádné; konektor je bezstavový a provider odpovědi
   neukladá.
 - Logy: provider payload ani osobní údaje se nesmějí zapisovat do aplikačních
-  logů.
+  logů. Platí to i pro **chybovou** cestu: text `ValidationError` obsahuje
+  `input_value=…`, tedy doslovný výřez odpovědi ARES, takže se do hlášky ani
+  do tracebacku nevkládá (viz `connector.server._schema_error`).
+- Vlastník přihlašovacích údajů (`credential_owner_kind`/`_id`): **není
+  aplikovatelný**. Konektor nemá `credentials` ani `user_config`, hosted režim
+  proto nečte Vault a control plane pro něj žádného vlastníka nevydává; SDK
+  navíc owner hlavičky bez `credential_version` odmítá. Zpracování se tedy
+  neváže na uživatelský ani týmový trezorový záznam.
 
 ## Technické ochrany
 
